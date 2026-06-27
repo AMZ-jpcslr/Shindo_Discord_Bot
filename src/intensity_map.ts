@@ -157,24 +157,15 @@ async function fetchTile(zoom: number, x: number, y: number): Promise<Buffer | n
     const maxTile = 2 ** zoom
     if (x < 0 || y < 0 || x >= maxTile || y >= maxTile) return null
 
-    const response = await fetch(`https://cyberjapandata.gsi.go.jp/xyz/pale/${zoom}/${x}/${y}.png`)
+    const response = await fetch(`https://a.basemaps.cartocdn.com/dark_nolabels/${zoom}/${x}/${y}.png`)
     if (!response.ok) return null
 
     const source = Buffer.from(await response.arrayBuffer())
     return sharp(source)
-        .grayscale()
-        .negate()
-        .modulate({ brightness: 0.55 })
+        .removeAlpha()
+        .modulate({ brightness: 0.85, saturation: 0.35 })
         .png()
         .toBuffer()
-}
-
-function escapeXml(value: string): string {
-    return value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
 }
 
 function buildOverlaySvg(
@@ -187,33 +178,36 @@ function buildOverlaySvg(
     const left = center.x - MAP_WIDTH / 2
     const top = center.y - MAP_HEIGHT / 2
 
-    const stationSvg = stations.map(station => {
+    const visibleStations = stations.map(station => {
         const point = project(station.coordinate, zoom)
         const x = point.x - left
         const y = point.y - top
-        if (x < -20 || y < -20 || x > MAP_WIDTH + 20 || y > MAP_HEIGHT + 20) return ''
+        return { station, x, y }
+    }).filter(({ x, y }) => x >= -20 && y >= -20 && x <= MAP_WIDTH + 20 && y <= MAP_HEIGHT + 20)
 
+    const stationByCell = new Map<string, { station: IntensityStation, x: number, y: number }>()
+    for (const item of visibleStations) {
+        const cell = `${Math.round(item.x / 12)}:${Math.round(item.y / 12)}`
+        const current = stationByCell.get(cell)
+        if (!current || intensityRank(item.station.Int) > intensityRank(current.station.Int)) {
+            stationByCell.set(cell, item)
+        }
+    }
+
+    const stationSvg = [...stationByCell.values()].map(({ station, x, y }) => {
         const radius = intensityRank(station.Int) >= 5 ? 8 : 6
-        const label = intensityRank(station.Int) >= 2
-            ? `<text x="${x + 10}" y="${y + 4}" fill="#e8edf2" font-size="10" font-family="Arial, sans-serif">${escapeXml(station.Name ?? '')}</text>`
-            : ''
 
         return `
             <circle cx="${x}" cy="${y}" r="${radius}" fill="${intensityColor(station.Int)}" stroke="#101418" stroke-width="2"/>
-            <text x="${x}" y="${y + 4}" fill="#ffffff" font-size="10" font-weight="700" text-anchor="middle" font-family="Arial, sans-serif">${escapeXml(station.Int ?? '')}</text>
-            ${label}
         `
     }).join('')
 
     const epicenterPoint = project(epicenter, zoom)
     const epicenterX = epicenterPoint.x - left
     const epicenterY = epicenterPoint.y - top
-    const magnitude = detail.Body?.Earthquake?.Magnitude
-    const title = magnitude ? `M${magnitude}` : 'Epicenter'
-
     const svg = `
         <svg width="${MAP_WIDTH}" height="${MAP_HEIGHT}" viewBox="0 0 ${MAP_WIDTH} ${MAP_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
-            <rect width="100%" height="100%" fill="rgba(16, 22, 18, 0.18)"/>
+            <rect width="100%" height="100%" fill="rgba(16, 22, 18, 0.12)"/>
             ${stationSvg}
             <g transform="translate(${epicenterX}, ${epicenterY})">
                 <line x1="-8" y1="-8" x2="8" y2="8" stroke="#ff493d" stroke-width="3" stroke-linecap="round"/>
@@ -221,8 +215,6 @@ function buildOverlaySvg(
                 <line x1="-8" y1="-8" x2="8" y2="8" stroke="#ffffff" stroke-width="1" stroke-linecap="round"/>
                 <line x1="8" y1="-8" x2="-8" y2="8" stroke="#ffffff" stroke-width="1" stroke-linecap="round"/>
             </g>
-            <rect x="12" y="12" width="138" height="30" rx="3" fill="rgba(0,0,0,0.58)" stroke="#8a9299"/>
-            <text x="24" y="32" fill="#ffffff" font-size="16" font-weight="700" font-family="Arial, sans-serif">${escapeXml(title)}</text>
         </svg>
     `
 
