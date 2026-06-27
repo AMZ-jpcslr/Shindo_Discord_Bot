@@ -1,6 +1,7 @@
 import { AttachmentBuilder, ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js'
 import fs from 'fs'
 import path from 'path'
+import { createIntensityMapAttachment } from '../intensity_map'
 
 type P2PEewArea = {
     name: string
@@ -153,109 +154,6 @@ function normalizeJmaTime(time?: string): string | null {
     return time.replace(/\//g, '-').replace(' ', 'T').slice(0, 16)
 }
 
-function intensityRank(intensity?: string): number {
-    switch (intensity) {
-        case '7': return 9
-        case '6+': return 8
-        case '6-': return 7
-        case '5+': return 6
-        case '5-': return 5
-        case '4': return 4
-        case '3': return 3
-        case '2': return 2
-        case '1': return 1
-        default: return 0
-    }
-}
-
-function intensityMarkerStyle(intensity?: string): string {
-    switch (intensity) {
-        case '7': return 'pm2vvm'
-        case '6+': return 'pm2rdm'
-        case '6-': return 'pm2rdm'
-        case '5+': return 'pm2orm'
-        case '5-': return 'pm2ywm'
-        case '4': return 'pm2ywm'
-        case '3': return 'pm2blm'
-        case '2': return 'pm2lbm'
-        case '1': return 'pm2grm'
-        default: return 'pm2grm'
-    }
-}
-
-function clamp(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value))
-}
-
-function zoomFromMagnitude(magnitude?: string): number {
-    const value = Number(magnitude)
-    if (!Number.isFinite(value)) return 7
-    if (value >= 8) return 4
-    if (value >= 7) return 5
-    if (value >= 6) return 6
-    if (value >= 5) return 7
-    if (value >= 4) return 8
-    return 9
-}
-
-function zoomFromSpread(
-    epicenter: { latitude: number, longitude: number },
-    points: { latitude: number, longitude: number }[],
-): number {
-    const maxDelta = points.reduce((currentMax, point) => {
-        const latDelta = Math.abs(point.latitude - epicenter.latitude)
-        const lonDelta = Math.abs(point.longitude - epicenter.longitude)
-        return Math.max(currentMax, latDelta, lonDelta)
-    }, 0)
-
-    if (maxDelta > 8) return 4
-    if (maxDelta > 4) return 5
-    if (maxDelta > 2) return 6
-    if (maxDelta > 1) return 7
-    if (maxDelta > 0.5) return 8
-    return 9
-}
-
-function calculateMapZoom(
-    detail: JmaQuakeDetail,
-    epicenter: { latitude: number, longitude: number },
-    points: { latitude: number, longitude: number }[],
-): number {
-    const magnitudeZoom = zoomFromMagnitude(detail.Body?.Earthquake?.Magnitude)
-    const spreadZoom = zoomFromSpread(epicenter, points)
-    return clamp(Math.min(magnitudeZoom, spreadZoom), 4, 9)
-}
-
-function buildJmaIntensityMapUrl(detail: JmaQuakeDetail): string | null {
-    const coordinate = parseJmaCoordinate(detail.Body?.Earthquake?.Hypocenter?.Area?.Coordinate)
-    if (!coordinate) return null
-
-    const stations = detail.Body?.Intensity?.Observation?.Pref
-        ?.flatMap(pref => pref.Area ?? [])
-        .flatMap(area => area.City ?? [])
-        .flatMap(city => city.IntensityStation ?? [])
-        .filter(station =>
-            typeof station.latlon?.lat === 'number' &&
-            typeof station.latlon?.lon === 'number'
-        )
-        .sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int))
-        .slice(0, 80) ?? []
-    const stationPoints = stations.map(station => ({
-        latitude: station.latlon?.lat as number,
-        longitude: station.latlon?.lon as number,
-    }))
-    const zoom = calculateMapZoom(detail, coordinate, stationPoints)
-
-    const markers = [
-        `${coordinate.longitude},${coordinate.latitude},pm2rdm`,
-        ...stations.map(station =>
-            `${station.latlon?.lon},${station.latlon?.lat},${intensityMarkerStyle(station.Int)}`
-        ),
-    ].join('~')
-
-    return `https://static-maps.yandex.ru/1.x/?ll=${coordinate.longitude},${coordinate.latitude}&z=${zoom}&size=600,400&l=map&lang=en_US&pt=${encodeURIComponent(markers)}`
-}
-
 function selectBestJmaItem(items: JmaQuakeListItem[]): JmaQuakeListItem | undefined {
     return items
         .filter(item => isValidJmaJsonPath(item.json))
@@ -309,7 +207,7 @@ async function buildEewEmbed(eew: P2PEewMessage): Promise<{ embeds: EmbedBuilder
     const maxScale = Math.max(...(eew.areas ?? []).map(area => area.scaleTo), 0)
     const scaleImage = localScaleImage(maxScale)
     const jmaDetail = await findJmaDetailForEew(eew).catch(() => null)
-    const intensityMapUrl = jmaDetail ? buildJmaIntensityMapUrl(jmaDetail) : null
+    const intensityMap = jmaDetail ? await createIntensityMapAttachment(jmaDetail, 'intensity-map.png') : null
     const areas = [...(eew.areas ?? [])]
         .sort((a, b) => b.scaleTo - a.scaleTo)
         .slice(0, 8)
@@ -345,20 +243,21 @@ async function buildEewEmbed(eew: P2PEewMessage): Promise<{ embeds: EmbedBuilder
         embed.setThumbnail(`attachment://${scaleImage.name}`)
     }
 
-    if (intensityMapUrl) {
-        embed.setImage(intensityMapUrl)
+    if (intensityMap) {
+        embed.setImage('attachment://intensity-map.png')
     }
 
-    return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] }
+    const files = [scaleImage, intensityMap].filter((file): file is AttachmentBuilder => Boolean(file))
+    return files.length ? { embeds: [embed], files } : { embeds: [embed] }
 }
 
-function buildJmaEmbed(detail: JmaQuakeDetail): { embeds: EmbedBuilder[], files?: AttachmentBuilder[] } {
+async function buildJmaEmbed(detail: JmaQuakeDetail): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
     const earthquake = detail.Body?.Earthquake
     const hypocenter = earthquake?.Hypocenter?.Area
     const maxScale = detail.Body?.Intensity?.Observation?.MaxInt
     const scaleImage = localScaleImage(maxScale)
     const coordinate = parseJmaCoordinate(hypocenter?.Coordinate)
-    const intensityMapUrl = buildJmaIntensityMapUrl(detail)
+    const intensityMap = await createIntensityMapAttachment(detail, 'intensity-map.png')
 
     const embed = new EmbedBuilder()
         .setTitle(detail.Head?.Title ?? '直近の地震情報')
@@ -374,8 +273,8 @@ function buildJmaEmbed(detail: JmaQuakeDetail): { embeds: EmbedBuilder[], files?
         )
         .setFooter({ text: 'Source: 気象庁' })
 
-    if (intensityMapUrl) {
-        embed.setImage(intensityMapUrl)
+    if (intensityMap) {
+        embed.setImage('attachment://intensity-map.png')
     }
 
     if (coordinate) {
@@ -390,7 +289,8 @@ function buildJmaEmbed(detail: JmaQuakeDetail): { embeds: EmbedBuilder[], files?
         embed.setThumbnail(`attachment://${scaleImage.name}`)
     }
 
-    return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] }
+    const files = [scaleImage, intensityMap].filter((file): file is AttachmentBuilder => Boolean(file))
+    return files.length ? { embeds: [embed], files } : { embeds: [embed] }
 }
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -418,7 +318,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         const detailResponse = await fetch(`https://www.jma.go.jp/bosai/quake/data/${latestPath}`)
         const detail = await detailResponse.json() as JmaQuakeDetail
 
-        await interaction.editReply(buildJmaEmbed(detail))
+        await interaction.editReply(await buildJmaEmbed(detail))
     } catch (error) {
         console.error(error)
         await interaction.editReply('地震情報の取得中にエラーが発生しました。')
