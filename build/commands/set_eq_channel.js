@@ -8,43 +8,34 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.data = void 0;
 exports.execute = execute;
 const discord_js_1 = require("discord.js");
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const DATA_PATH = path_1.default.join(__dirname, '../../data/eq_channels.json');
-function loadChannels() {
-    if (!fs_1.default.existsSync(DATA_PATH))
-        return {};
-    return JSON.parse(fs_1.default.readFileSync(DATA_PATH, 'utf8'));
-}
-function saveChannels(data) {
-    fs_1.default.mkdirSync(path_1.default.dirname(DATA_PATH), { recursive: true });
-    fs_1.default.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), 'utf8');
-}
+const eq_notify_1 = require("../eq_notify");
 exports.data = new discord_js_1.SlashCommandBuilder()
     .setName('set_eq_channel')
-    .setDescription('緊急地震速報の通知チャンネルを設定')
-    .addChannelOption(opt => opt.setName('channel')
-    .setDescription('通知先チャンネル')
-    .addChannelTypes(discord_js_1.ChannelType.GuildText)
+    .setDescription('緊急地震速報と地震情報の通知チャンネルを設定します')
+    .setDefaultMemberPermissions(discord_js_1.PermissionFlagsBits.ManageGuild)
+    .addChannelOption(option => option
+    .setName('channel')
+    .setDescription('通知を送信するテキストチャンネル')
+    .addChannelTypes(discord_js_1.ChannelType.GuildText, discord_js_1.ChannelType.GuildAnnouncement)
     .setRequired(true));
 function execute(interaction) {
     return __awaiter(this, void 0, void 0, function* () {
-        const channel = interaction.options.getChannel('channel', true);
         const guildId = interaction.guildId;
+        const channel = interaction.options.getChannel('channel', true);
         if (!guildId) {
-            yield interaction.reply('このコマンドはサーバー内でのみ使用できます。');
+            yield interaction.reply({ content: 'このコマンドはサーバー内でのみ使用できます。', ephemeral: true });
             return;
         }
-        const channels = loadChannels();
+        const channels = (0, eq_notify_1.loadEqChannels)();
         channels[guildId] = channel.id;
-        saveChannels(channels);
-        yield interaction.reply(`緊急地震速報の通知チャンネルを <#${channel.id}> に設定しました。`);
+        (0, eq_notify_1.saveEqChannels)(channels);
+        yield interaction.reply({
+            content: `緊急地震速報と地震情報の通知先を <#${channel.id}> に設定しました。`,
+            ephemeral: true,
+        });
     });
 }

@@ -14,9 +14,10 @@ exports.execute = execute;
 const discord_js_1 = require("discord.js");
 exports.data = new discord_js_1.SlashCommandBuilder()
     .setName('get_eq')
-    .setDescription('直近に発表された地震情報を取得します（気象庁データ）');
-function maxScaleToString(maxScale) {
-    switch (maxScale) {
+    .setDescription('直近の緊急地震速報または地震情報を確認します');
+function scaleToString(scale) {
+    const value = typeof scale === 'string' ? Number(scale) : scale;
+    switch (value) {
         case 10: return '1';
         case 20: return '2';
         case 30: return '3';
@@ -26,89 +27,87 @@ function maxScaleToString(maxScale) {
         case 55: return '6弱';
         case 60: return '6強';
         case 70: return '7';
-        default: return String(maxScale);
+        default: return scale ? String(scale) : '不明';
     }
+}
+function formatDepth(depth) {
+    if (depth === undefined || depth === null || depth === '')
+        return '不明';
+    if (typeof depth === 'number')
+        return depth === 0 ? 'ごく浅い' : `${depth}km`;
+    return depth;
+}
+function isValidJmaJsonPath(jsonPath) {
+    return (typeof jsonPath === 'string' &&
+        jsonPath.endsWith('.json') &&
+        !jsonPath.startsWith('/') &&
+        !jsonPath.includes('..'));
+}
+function buildEewEmbed(eew) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+    const hypocenter = (_a = eew.earthquake) === null || _a === void 0 ? void 0 : _a.hypocenter;
+    const maxScale = Math.max(...((_b = eew.areas) !== null && _b !== void 0 ? _b : []).map(area => area.scaleTo), 0);
+    const areas = [...((_c = eew.areas) !== null && _c !== void 0 ? _c : [])]
+        .sort((a, b) => b.scaleTo - a.scaleTo)
+        .slice(0, 8)
+        .map(area => `${area.name}: ${scaleToString(area.scaleFrom)}${area.scaleFrom === area.scaleTo ? '' : `-${scaleToString(area.scaleTo)}`}`)
+        .join('\n');
+    const embed = new discord_js_1.EmbedBuilder()
+        .setTitle(eew.cancelled ? '直近の緊急地震速報 取消' : '直近の緊急地震速報')
+        .setColor(eew.cancelled ? 0x808080 : 0xff2d2d)
+        .addFields({ name: '震源', value: (_d = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name) !== null && _d !== void 0 ? _d : '不明', inline: true }, { name: '規模', value: (hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.magnitude) ? `M${hypocenter.magnitude}` : '不明', inline: true }, { name: '深さ', value: formatDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.depth), inline: true }, { name: '最大予測震度', value: maxScale > 0 ? scaleToString(maxScale) : '不明', inline: true }, { name: '発生時刻', value: (_f = (_e = eew.earthquake) === null || _e === void 0 ? void 0 : _e.originTime) !== null && _f !== void 0 ? _f : '不明', inline: true }, { name: '発表時刻', value: (_j = (_h = (_g = eew.issue) === null || _g === void 0 ? void 0 : _g.time) !== null && _h !== void 0 ? _h : eew.time) !== null && _j !== void 0 ? _j : '不明', inline: true })
+        .setFooter({ text: 'Source: P2P地震情報 / 気象庁' });
+    if (areas) {
+        embed.addFields({ name: '主な予測地域', value: areas, inline: false });
+    }
+    if (typeof (hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.latitude) === 'number' && typeof hypocenter.longitude === 'number') {
+        embed.addFields({
+            name: '地図',
+            value: `[震源付近を開く](https://www.google.com/maps?q=${hypocenter.latitude},${hypocenter.longitude})`,
+            inline: false,
+        });
+    }
+    return embed;
+}
+function buildJmaEmbed(detail, jsonPath) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
+    const earthquake = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake;
+    const hypocenter = (_b = earthquake === null || earthquake === void 0 ? void 0 : earthquake.Hypocenter) === null || _b === void 0 ? void 0 : _b.Area;
+    const imagePath = jsonPath.replace(/\.json$/, '.png');
+    return new discord_js_1.EmbedBuilder()
+        .setTitle((_d = (_c = detail.Head) === null || _c === void 0 ? void 0 : _c.Title) !== null && _d !== void 0 ? _d : '直近の地震情報')
+        .setColor(0x2d6cdf)
+        .setDescription(((_e = detail.Head) === null || _e === void 0 ? void 0 : _e.Text) || '気象庁から発表された直近の地震情報です。')
+        .addFields({ name: '震源', value: (_f = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Name) !== null && _f !== void 0 ? _f : '不明', inline: true }, { name: '規模', value: (earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude) ? `M${earthquake.Magnitude}` : '不明', inline: true }, { name: '深さ', value: formatDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Depth), inline: true }, { name: '最大震度', value: scaleToString((_j = (_h = (_g = detail.Body) === null || _g === void 0 ? void 0 : _g.Intensity) === null || _h === void 0 ? void 0 : _h.Observation) === null || _j === void 0 ? void 0 : _j.MaxInt), inline: true }, { name: '発生時刻', value: (_l = (_k = earthquake === null || earthquake === void 0 ? void 0 : earthquake.OriginTime) !== null && _k !== void 0 ? _k : earthquake === null || earthquake === void 0 ? void 0 : earthquake.ArrivalTime) !== null && _l !== void 0 ? _l : '不明', inline: true }, { name: '発表時刻', value: (_o = (_m = detail.Head) === null || _m === void 0 ? void 0 : _m.ReportDateTime) !== null && _o !== void 0 ? _o : '不明', inline: true })
+        .setImage(`https://www.jma.go.jp/bosai/quake/data/${imagePath}`)
+        .setFooter({ text: 'Source: 気象庁' });
 }
 function execute(interaction) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w;
-        yield interaction.deferReply();
+        var _a;
+        yield interaction.deferReply({ ephemeral: true });
         try {
-            const res = yield fetch('https://www.jma.go.jp/bosai/quake/data/list.json');
-            const list = yield res.json();
-            if (!list.length) {
+            const eewResponse = yield fetch('https://api.p2pquake.net/v2/history?codes=556&limit=1');
+            if (eewResponse.ok) {
+                const eews = yield eewResponse.json();
+                if (eews[0]) {
+                    yield interaction.editReply({ embeds: [buildEewEmbed(eews[0])] });
+                    return;
+                }
+            }
+            const listResponse = yield fetch('https://www.jma.go.jp/bosai/quake/data/list.json');
+            const list = yield listResponse.json();
+            const latestPath = (_a = list.find(item => isValidJmaJsonPath(item.json))) === null || _a === void 0 ? void 0 : _a.json;
+            if (!latestPath) {
                 yield interaction.editReply('直近の地震情報が見つかりませんでした。');
                 return;
             }
-            const latestId = list[0].json;
-            const imageUrl = latestId.replace('.json', '.png');
-            const jmaImageUrl = `https://www.jma.go.jp/bosai/quake/data/${imageUrl}`;
-            const detailRes = yield fetch(`https://www.jma.go.jp/bosai/quake/data/${latestId}`);
-            const detail = yield detailRes.json();
-            const time = (_b = (_a = detail.Head) === null || _a === void 0 ? void 0 : _a.ReportDateTime) !== null && _b !== void 0 ? _b : '不明';
-            const hypocenter = (_g = (_f = (_e = (_d = (_c = detail.Body) === null || _c === void 0 ? void 0 : _c.Earthquake) === null || _d === void 0 ? void 0 : _d.Hypocenter) === null || _e === void 0 ? void 0 : _e.Area) === null || _f === void 0 ? void 0 : _f.Name) !== null && _g !== void 0 ? _g : '不明';
-            const magnitude = (_k = (_j = (_h = detail.Body) === null || _h === void 0 ? void 0 : _h.Earthquake) === null || _j === void 0 ? void 0 : _j.Magnitude) !== null && _k !== void 0 ? _k : '不明';
-            const maxScale = (_p = (_o = (_m = (_l = detail.Body) === null || _l === void 0 ? void 0 : _l.Intensity) === null || _m === void 0 ? void 0 : _m.Observation) === null || _o === void 0 ? void 0 : _o.MaxInt) !== null && _p !== void 0 ? _p : '不明';
-            const depth = (_u = (_t = (_s = (_r = (_q = detail.Body) === null || _q === void 0 ? void 0 : _q.Earthquake) === null || _r === void 0 ? void 0 : _r.Hypocenter) === null || _s === void 0 ? void 0 : _s.Area) === null || _t === void 0 ? void 0 : _t.Depth) !== null && _u !== void 0 ? _u : '不明';
-            const text = (_w = (_v = detail.Head) === null || _v === void 0 ? void 0 : _v.Text) !== null && _w !== void 0 ? _w : '';
-            const maxScaleStr = maxScale !== '不明' ? maxScaleToString(Number(maxScale)) : '不明';
-            // 震度画像URL
-            let shindoImageUrl = undefined;
-            switch (maxScale) {
-                case 10:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300018.jpg?token=GHSAT0AAAAAADGG2T7ANXQR6SRXJKIUTDQ62DCVRBQ';
-                    break;
-                case 20:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300017.jpg?token=GHSAT0AAAAAADGG2T7ABGGNE7PURHBWO7N22DCVRMA';
-                    break;
-                case 30:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300015.jpg?token=GHSAT0AAAAAADGG2T7BGJGHXRXF2NPM7QGM2DCVRTA';
-                    break;
-                case 40:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300014.jpg?token=GHSAT0AAAAAADGG2T7AYHOQV3DSPQJVTHEI2DCVRYA';
-                    break;
-                case 45:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300013.jpg?token=GHSAT0AAAAAADGG2T7BCGAFRP6G7WWO4QJE2DCVR5Q';
-                    break;
-                case 50:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300012.jpg?token=GHSAT0AAAAAADGG2T7ARIE3GAFKN3WKEW7Q2DCVSCQ';
-                    break;
-                case 55:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300011.jpg?token=GHSAT0AAAAAADGG2T7AHK5SONZC2LCATADQ2DCVSIQ';
-                    break;
-                case 60:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300010.jpg?token=GHSAT0AAAAAADGG2T7BW2EDUOE5JTYUSIRK2DCVSPQ';
-                    break;
-                case 70:
-                    shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300009.jpg?token=GHSAT0AAAAAADGG2T7BE45YPOH6PMH45LNC2DCVSUA';
-                    break;
-                default: shindoImageUrl = undefined;
-            }
-            // 埋め込み作成
-            const embed = new discord_js_1.EmbedBuilder()
-                .setTitle('**地震速報**') // 最大サイズの太字
-                .setColor(0x2d3be7)
-                .setDescription(`${text ? text + '\n' : ''}` +
-                `\n` +
-                `**震源**　${hypocenter}\n` +
-                `**規模**　M${magnitude}\n` +
-                `**深さ**　${depth}\n` +
-                `**発生時刻**　${time}\n`);
-            // 震度画像を右上サムネイルに
-            if (shindoImageUrl) {
-                embed.setThumbnail(shindoImageUrl);
-            }
-            // 震度分布画像（気象庁公式）を埋め込み画像に
-            const response = yield fetch(jmaImageUrl);
-            if (response.ok) {
-                embed.setImage(jmaImageUrl);
-            }
-            // フッターに出典
-            embed.setFooter({ text: 'Earthquake Information by JMA ・ ' + (time || '') });
-            yield interaction.editReply({ embeds: [embed] });
+            const detailResponse = yield fetch(`https://www.jma.go.jp/bosai/quake/data/${latestPath}`);
+            const detail = yield detailResponse.json();
+            yield interaction.editReply({ embeds: [buildJmaEmbed(detail, latestPath)] });
         }
-        catch (e) {
-            console.error(e);
+        catch (error) {
+            console.error(error);
             yield interaction.editReply('地震情報の取得中にエラーが発生しました。');
         }
     });

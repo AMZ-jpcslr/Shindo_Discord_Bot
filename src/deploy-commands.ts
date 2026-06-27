@@ -16,16 +16,28 @@ const commands = [
     getEqData.toJSON(),
 ]
 
-const rest = new REST({ version: '10' }).setToken(process.env.TOKEN as string)
+const token = process.env.TOKEN
+const clientId = process.env.CLIENT_ID
+
+if (!token) {
+    throw new Error('TOKEN が .env に設定されていません')
+}
+
+if (!clientId) {
+    throw new Error('CLIENT_ID が .env に設定されていません')
+}
+
+const rest = new REST({ version: '10' }).setToken(token)
+const applicationId: string = clientId
 
 async function main() {
     try {
         console.log('スラッシュコマンドを登録中...')
         await rest.put(
-            Routes.applicationCommands(process.env.CLIENT_ID as string),
+            Routes.applicationCommands(applicationId),
             { body: commands }
         )
-        console.log('登録完了！')
+        console.log('登録完了')
     } catch (error) {
         console.error(error)
     }

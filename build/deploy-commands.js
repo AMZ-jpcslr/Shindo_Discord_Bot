@@ -27,13 +27,22 @@ const commands = [
     set_eq_channel_1.data.toJSON(),
     get_eq_1.data.toJSON(),
 ];
-const rest = new discord_js_1.REST({ version: '10' }).setToken(process.env.TOKEN);
+const token = process.env.TOKEN;
+const clientId = process.env.CLIENT_ID;
+if (!token) {
+    throw new Error('TOKEN が .env に設定されていません');
+}
+if (!clientId) {
+    throw new Error('CLIENT_ID が .env に設定されていません');
+}
+const rest = new discord_js_1.REST({ version: '10' }).setToken(token);
+const applicationId = clientId;
 function main() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             console.log('スラッシュコマンドを登録中...');
-            yield rest.put(discord_js_1.Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-            console.log('登録完了！');
+            yield rest.put(discord_js_1.Routes.applicationCommands(applicationId), { body: commands });
+            console.log('登録完了');
         }
         catch (error) {
             console.error(error);

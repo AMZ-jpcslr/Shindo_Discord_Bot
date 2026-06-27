@@ -1,11 +1,71 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js'
+import { ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js'
+
+type P2PEewArea = {
+    name: string
+    scaleFrom: number
+    scaleTo: number
+    arrivalTime: string | null
+}
+
+type P2PEewMessage = {
+    id: string
+    cancelled: boolean
+    time: string
+    issue?: {
+        serial?: string
+        time?: string
+    }
+    earthquake?: {
+        originTime?: string
+        hypocenter?: {
+            name?: string
+            depth?: number
+            magnitude?: number
+            latitude?: number
+            longitude?: number
+        }
+    }
+    areas?: P2PEewArea[]
+}
+
+type JmaQuakeListItem = {
+    json?: string
+}
+
+type JmaQuakeDetail = {
+    Head?: {
+        ReportDateTime?: string
+        Title?: string
+        Text?: string
+    }
+    Body?: {
+        Earthquake?: {
+            OriginTime?: string
+            ArrivalTime?: string
+            Magnitude?: string
+            Hypocenter?: {
+                Area?: {
+                    Name?: string
+                    Depth?: string
+                }
+            }
+        }
+        Intensity?: {
+            Observation?: {
+                MaxInt?: string
+            }
+        }
+    }
+}
 
 export const data = new SlashCommandBuilder()
     .setName('get_eq')
-    .setDescription('直近に発表された地震情報を取得します（気象庁データ）')
+    .setDescription('直近の緊急地震速報または地震情報を確認します')
 
-function maxScaleToString(maxScale: number): string {
-    switch (maxScale) {
+function scaleToString(scale: number | string | undefined): string {
+    const value = typeof scale === 'string' ? Number(scale) : scale
+
+    switch (value) {
         case 10: return '1'
         case 20: return '2'
         case 30: return '3'
@@ -15,79 +75,111 @@ function maxScaleToString(maxScale: number): string {
         case 55: return '6弱'
         case 60: return '6強'
         case 70: return '7'
-        default: return String(maxScale)
+        default: return scale ? String(scale) : '不明'
     }
 }
 
+function formatDepth(depth: number | string | undefined): string {
+    if (depth === undefined || depth === null || depth === '') return '不明'
+    if (typeof depth === 'number') return depth === 0 ? 'ごく浅い' : `${depth}km`
+    return depth
+}
+
+function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
+    return (
+        typeof jsonPath === 'string' &&
+        jsonPath.endsWith('.json') &&
+        !jsonPath.startsWith('/') &&
+        !jsonPath.includes('..')
+    )
+}
+
+function buildEewEmbed(eew: P2PEewMessage): EmbedBuilder {
+    const hypocenter = eew.earthquake?.hypocenter
+    const maxScale = Math.max(...(eew.areas ?? []).map(area => area.scaleTo), 0)
+    const areas = [...(eew.areas ?? [])]
+        .sort((a, b) => b.scaleTo - a.scaleTo)
+        .slice(0, 8)
+        .map(area => `${area.name}: ${scaleToString(area.scaleFrom)}${area.scaleFrom === area.scaleTo ? '' : `-${scaleToString(area.scaleTo)}`}`)
+        .join('\n')
+
+    const embed = new EmbedBuilder()
+        .setTitle(eew.cancelled ? '直近の緊急地震速報 取消' : '直近の緊急地震速報')
+        .setColor(eew.cancelled ? 0x808080 : 0xff2d2d)
+        .addFields(
+            { name: '震源', value: hypocenter?.name ?? '不明', inline: true },
+            { name: '規模', value: hypocenter?.magnitude ? `M${hypocenter.magnitude}` : '不明', inline: true },
+            { name: '深さ', value: formatDepth(hypocenter?.depth), inline: true },
+            { name: '最大予測震度', value: maxScale > 0 ? scaleToString(maxScale) : '不明', inline: true },
+            { name: '発生時刻', value: eew.earthquake?.originTime ?? '不明', inline: true },
+            { name: '発表時刻', value: eew.issue?.time ?? eew.time ?? '不明', inline: true },
+        )
+        .setFooter({ text: 'Source: P2P地震情報 / 気象庁' })
+
+    if (areas) {
+        embed.addFields({ name: '主な予測地域', value: areas, inline: false })
+    }
+
+    if (typeof hypocenter?.latitude === 'number' && typeof hypocenter.longitude === 'number') {
+        embed.addFields({
+            name: '地図',
+            value: `[震源付近を開く](https://www.google.com/maps?q=${hypocenter.latitude},${hypocenter.longitude})`,
+            inline: false,
+        })
+    }
+
+    return embed
+}
+
+function buildJmaEmbed(detail: JmaQuakeDetail, jsonPath: string): EmbedBuilder {
+    const earthquake = detail.Body?.Earthquake
+    const hypocenter = earthquake?.Hypocenter?.Area
+    const imagePath = jsonPath.replace(/\.json$/, '.png')
+
+    return new EmbedBuilder()
+        .setTitle(detail.Head?.Title ?? '直近の地震情報')
+        .setColor(0x2d6cdf)
+        .setDescription(detail.Head?.Text || '気象庁から発表された直近の地震情報です。')
+        .addFields(
+            { name: '震源', value: hypocenter?.Name ?? '不明', inline: true },
+            { name: '規模', value: earthquake?.Magnitude ? `M${earthquake.Magnitude}` : '不明', inline: true },
+            { name: '深さ', value: formatDepth(hypocenter?.Depth), inline: true },
+            { name: '最大震度', value: scaleToString(detail.Body?.Intensity?.Observation?.MaxInt), inline: true },
+            { name: '発生時刻', value: earthquake?.OriginTime ?? earthquake?.ArrivalTime ?? '不明', inline: true },
+            { name: '発表時刻', value: detail.Head?.ReportDateTime ?? '不明', inline: true },
+        )
+        .setImage(`https://www.jma.go.jp/bosai/quake/data/${imagePath}`)
+        .setFooter({ text: 'Source: 気象庁' })
+}
+
 export async function execute(interaction: ChatInputCommandInteraction) {
-    await interaction.deferReply()
+    await interaction.deferReply({ ephemeral: true })
+
     try {
-        const res = await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')
-        const list = await res.json() as { json: string }[]
-        if (!list.length) {
+        const eewResponse = await fetch('https://api.p2pquake.net/v2/history?codes=556&limit=1')
+        if (eewResponse.ok) {
+            const eews = await eewResponse.json() as P2PEewMessage[]
+            if (eews[0]) {
+                await interaction.editReply({ embeds: [buildEewEmbed(eews[0])] })
+                return
+            }
+        }
+
+        const listResponse = await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')
+        const list = await listResponse.json() as JmaQuakeListItem[]
+        const latestPath = list.find(item => isValidJmaJsonPath(item.json))?.json
+
+        if (!latestPath) {
             await interaction.editReply('直近の地震情報が見つかりませんでした。')
             return
         }
-        const latestId = list[0].json
-        const imageUrl = latestId.replace('.json', '.png')
-        const jmaImageUrl = `https://www.jma.go.jp/bosai/quake/data/${imageUrl}`
 
-        const detailRes = await fetch(`https://www.jma.go.jp/bosai/quake/data/${latestId}`)
-        const detail = await detailRes.json() as any
+        const detailResponse = await fetch(`https://www.jma.go.jp/bosai/quake/data/${latestPath}`)
+        const detail = await detailResponse.json() as JmaQuakeDetail
 
-        const time = detail.Head?.ReportDateTime ?? '不明'
-        const hypocenter = detail.Body?.Earthquake?.Hypocenter?.Area?.Name ?? '不明'
-        const magnitude = detail.Body?.Earthquake?.Magnitude ?? '不明'
-        const maxScale = detail.Body?.Intensity?.Observation?.MaxInt ?? '不明'
-        const depth = detail.Body?.Earthquake?.Hypocenter?.Area?.Depth ?? '不明'
-        const text = detail.Head?.Text ?? ''
-        const maxScaleStr = maxScale !== '不明' ? maxScaleToString(Number(maxScale)) : '不明'
-
-        // 震度画像URL
-        let shindoImageUrl: string | undefined = undefined
-        switch (maxScale) {
-            case 10: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300018.jpg?token=GHSAT0AAAAAADGG2T7ANXQR6SRXJKIUTDQ62DCVRBQ'; break
-            case 20: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300017.jpg?token=GHSAT0AAAAAADGG2T7ABGGNE7PURHBWO7N22DCVRMA'; break
-            case 30: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300015.jpg?token=GHSAT0AAAAAADGG2T7BGJGHXRXF2NPM7QGM2DCVRTA'; break
-            case 40: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300014.jpg?token=GHSAT0AAAAAADGG2T7AYHOQV3DSPQJVTHEI2DCVRYA'; break
-            case 45: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300013.jpg?token=GHSAT0AAAAAADGG2T7BCGAFRP6G7WWO4QJE2DCVR5Q'; break
-            case 50: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300012.jpg?token=GHSAT0AAAAAADGG2T7ARIE3GAFKN3WKEW7Q2DCVSCQ'; break
-            case 55: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300011.jpg?token=GHSAT0AAAAAADGG2T7AHK5SONZC2LCATADQ2DCVSIQ'; break
-            case 60: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300010.jpg?token=GHSAT0AAAAAADGG2T7BW2EDUOE5JTYUSIRK2DCVSPQ'; break
-            case 70: shindoImageUrl = 'https://raw.githubusercontent.com/AMZ-jpcslr/Discord_Bot/refs/heads/master/nc300009.jpg?token=GHSAT0AAAAAADGG2T7BE45YPOH6PMH45LNC2DCVSUA'; break
-            default: shindoImageUrl = undefined
-        }
-
-        // 埋め込み作成
-        const embed = new EmbedBuilder()
-            .setTitle('**地震速報**') // 最大サイズの太字
-            .setColor(0x2d3be7)
-            .setDescription(
-                `${text ? text + '\n' : ''}` +
-                `\n` +
-                `**震源**　${hypocenter}\n` +
-                `**規模**　M${magnitude}\n` +
-                `**深さ**　${depth}\n` +
-                `**発生時刻**　${time}\n`
-            )
-
-        // 震度画像を右上サムネイルに
-        if (shindoImageUrl) {
-            embed.setThumbnail(shindoImageUrl)
-        }
-
-        // 震度分布画像（気象庁公式）を埋め込み画像に
-        const response = await fetch(jmaImageUrl)
-        if (response.ok) {
-            embed.setImage(jmaImageUrl)
-        }
-
-        // フッターに出典
-        embed.setFooter({ text: 'Earthquake Information by JMA ・ ' + (time || '') })
-
-        await interaction.editReply({ embeds: [embed] })
-    } catch (e) {
-        console.error(e)
+        await interaction.editReply({ embeds: [buildJmaEmbed(detail, latestPath)] })
+    } catch (error) {
+        console.error(error)
         await interaction.editReply('地震情報の取得中にエラーが発生しました。')
     }
 }
