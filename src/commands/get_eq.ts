@@ -183,6 +183,49 @@ function intensityMarkerStyle(intensity?: string): string {
     }
 }
 
+function clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value))
+}
+
+function zoomFromMagnitude(magnitude?: string): number {
+    const value = Number(magnitude)
+    if (!Number.isFinite(value)) return 7
+    if (value >= 8) return 4
+    if (value >= 7) return 5
+    if (value >= 6) return 6
+    if (value >= 5) return 7
+    if (value >= 4) return 8
+    return 9
+}
+
+function zoomFromSpread(
+    epicenter: { latitude: number, longitude: number },
+    points: { latitude: number, longitude: number }[],
+): number {
+    const maxDelta = points.reduce((currentMax, point) => {
+        const latDelta = Math.abs(point.latitude - epicenter.latitude)
+        const lonDelta = Math.abs(point.longitude - epicenter.longitude)
+        return Math.max(currentMax, latDelta, lonDelta)
+    }, 0)
+
+    if (maxDelta > 8) return 4
+    if (maxDelta > 4) return 5
+    if (maxDelta > 2) return 6
+    if (maxDelta > 1) return 7
+    if (maxDelta > 0.5) return 8
+    return 9
+}
+
+function calculateMapZoom(
+    detail: JmaQuakeDetail,
+    epicenter: { latitude: number, longitude: number },
+    points: { latitude: number, longitude: number }[],
+): number {
+    const magnitudeZoom = zoomFromMagnitude(detail.Body?.Earthquake?.Magnitude)
+    const spreadZoom = zoomFromSpread(epicenter, points)
+    return clamp(Math.min(magnitudeZoom, spreadZoom), 4, 9)
+}
+
 function buildJmaIntensityMapUrl(detail: JmaQuakeDetail): string | null {
     const coordinate = parseJmaCoordinate(detail.Body?.Earthquake?.Hypocenter?.Area?.Coordinate)
     if (!coordinate) return null
@@ -197,6 +240,11 @@ function buildJmaIntensityMapUrl(detail: JmaQuakeDetail): string | null {
         )
         .sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int))
         .slice(0, 80) ?? []
+    const stationPoints = stations.map(station => ({
+        latitude: station.latlon?.lat as number,
+        longitude: station.latlon?.lon as number,
+    }))
+    const zoom = calculateMapZoom(detail, coordinate, stationPoints)
 
     const markers = [
         `${coordinate.longitude},${coordinate.latitude},pm2rdm`,
@@ -205,7 +253,7 @@ function buildJmaIntensityMapUrl(detail: JmaQuakeDetail): string | null {
         ),
     ].join('~')
 
-    return `https://static-maps.yandex.ru/1.x/?ll=${coordinate.longitude},${coordinate.latitude}&z=6&size=600,400&l=map&pt=${encodeURIComponent(markers)}`
+    return `https://static-maps.yandex.ru/1.x/?ll=${coordinate.longitude},${coordinate.latitude}&z=${zoom}&size=600,400&l=map&lang=en_US&pt=${encodeURIComponent(markers)}`
 }
 
 function selectBestJmaItem(items: JmaQuakeListItem[]): JmaQuakeListItem | undefined {

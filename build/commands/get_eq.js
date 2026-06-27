@@ -111,6 +111,49 @@ function intensityMarkerStyle(intensity) {
         default: return 'pm2grm';
     }
 }
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+function zoomFromMagnitude(magnitude) {
+    const value = Number(magnitude);
+    if (!Number.isFinite(value))
+        return 7;
+    if (value >= 8)
+        return 4;
+    if (value >= 7)
+        return 5;
+    if (value >= 6)
+        return 6;
+    if (value >= 5)
+        return 7;
+    if (value >= 4)
+        return 8;
+    return 9;
+}
+function zoomFromSpread(epicenter, points) {
+    const maxDelta = points.reduce((currentMax, point) => {
+        const latDelta = Math.abs(point.latitude - epicenter.latitude);
+        const lonDelta = Math.abs(point.longitude - epicenter.longitude);
+        return Math.max(currentMax, latDelta, lonDelta);
+    }, 0);
+    if (maxDelta > 8)
+        return 4;
+    if (maxDelta > 4)
+        return 5;
+    if (maxDelta > 2)
+        return 6;
+    if (maxDelta > 1)
+        return 7;
+    if (maxDelta > 0.5)
+        return 8;
+    return 9;
+}
+function calculateMapZoom(detail, epicenter, points) {
+    var _a, _b;
+    const magnitudeZoom = zoomFromMagnitude((_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake) === null || _b === void 0 ? void 0 : _b.Magnitude);
+    const spreadZoom = zoomFromSpread(epicenter, points);
+    return clamp(Math.min(magnitudeZoom, spreadZoom), 4, 9);
+}
 function buildJmaIntensityMapUrl(detail) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     const coordinate = parseJmaCoordinate((_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake) === null || _b === void 0 ? void 0 : _b.Hypocenter) === null || _c === void 0 ? void 0 : _c.Area) === null || _d === void 0 ? void 0 : _d.Coordinate);
@@ -121,11 +164,19 @@ function buildJmaIntensityMapUrl(detail) {
         return typeof ((_a = station.latlon) === null || _a === void 0 ? void 0 : _a.lat) === 'number' &&
             typeof ((_b = station.latlon) === null || _b === void 0 ? void 0 : _b.lon) === 'number';
     }).sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int)).slice(0, 80)) !== null && _j !== void 0 ? _j : [];
+    const stationPoints = stations.map(station => {
+        var _a, _b;
+        return ({
+            latitude: (_a = station.latlon) === null || _a === void 0 ? void 0 : _a.lat,
+            longitude: (_b = station.latlon) === null || _b === void 0 ? void 0 : _b.lon,
+        });
+    });
+    const zoom = calculateMapZoom(detail, coordinate, stationPoints);
     const markers = [
         `${coordinate.longitude},${coordinate.latitude},pm2rdm`,
         ...stations.map(station => { var _a, _b; return `${(_a = station.latlon) === null || _a === void 0 ? void 0 : _a.lon},${(_b = station.latlon) === null || _b === void 0 ? void 0 : _b.lat},${intensityMarkerStyle(station.Int)}`; }),
     ].join('~');
-    return `https://static-maps.yandex.ru/1.x/?ll=${coordinate.longitude},${coordinate.latitude}&z=6&size=600,400&l=map&pt=${encodeURIComponent(markers)}`;
+    return `https://static-maps.yandex.ru/1.x/?ll=${coordinate.longitude},${coordinate.latitude}&z=${zoom}&size=600,400&l=map&lang=en_US&pt=${encodeURIComponent(markers)}`;
 }
 function selectBestJmaItem(items) {
     return items
