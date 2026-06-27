@@ -14,6 +14,7 @@ type P2PEewMessage = {
     cancelled: boolean
     time: string
     issue?: {
+        eventId?: string
         serial?: string
         time?: string
     }
@@ -31,6 +32,12 @@ type P2PEewMessage = {
 }
 
 type JmaQuakeListItem = {
+    ctt?: string
+    eid?: string
+    at?: string
+    anm?: string
+    mag?: string
+    maxi?: string
     json?: string
 }
 
@@ -56,6 +63,19 @@ type JmaQuakeDetail = {
         Intensity?: {
             Observation?: {
                 MaxInt?: string
+                Pref?: {
+                    Area?: {
+                        City?: {
+                            IntensityStation?: {
+                                Int?: string
+                                latlon?: {
+                                    lat?: number
+                                    lon?: number
+                                }
+                            }[]
+                        }[]
+                    }[]
+                }[]
             }
         }
     }
@@ -116,13 +136,6 @@ function localScaleImage(scale: number | string | undefined): AttachmentBuilder 
     return new AttachmentBuilder(filePath, { name: fileName })
 }
 
-function staticMapImageUrl(latitude?: number, longitude?: number): string | null {
-    if (typeof latitude !== 'number' || typeof longitude !== 'number') return null
-
-    const marker = `${latitude},${longitude},red-pushpin`
-    return `https://staticmap.openstreetmap.de/staticmap.php?center=${latitude},${longitude}&zoom=6&size=600x400&markers=${encodeURIComponent(marker)}`
-}
-
 function parseJmaCoordinate(coordinate?: string): { latitude: number, longitude: number } | null {
     if (!coordinate) return null
 
@@ -135,6 +148,105 @@ function parseJmaCoordinate(coordinate?: string): { latitude: number, longitude:
     }
 }
 
+function normalizeJmaTime(time?: string): string | null {
+    if (!time) return null
+    return time.replace(/\//g, '-').replace(' ', 'T').slice(0, 16)
+}
+
+function intensityRank(intensity?: string): number {
+    switch (intensity) {
+        case '7': return 9
+        case '6+': return 8
+        case '6-': return 7
+        case '5+': return 6
+        case '5-': return 5
+        case '4': return 4
+        case '3': return 3
+        case '2': return 2
+        case '1': return 1
+        default: return 0
+    }
+}
+
+function intensityMarkerStyle(intensity?: string): string {
+    switch (intensity) {
+        case '7': return 'pm2vvm'
+        case '6+': return 'pm2rdm'
+        case '6-': return 'pm2rdm'
+        case '5+': return 'pm2orm'
+        case '5-': return 'pm2ywm'
+        case '4': return 'pm2ywm'
+        case '3': return 'pm2blm'
+        case '2': return 'pm2lbm'
+        case '1': return 'pm2grm'
+        default: return 'pm2grm'
+    }
+}
+
+function buildJmaIntensityMapUrl(detail: JmaQuakeDetail): string | null {
+    const coordinate = parseJmaCoordinate(detail.Body?.Earthquake?.Hypocenter?.Area?.Coordinate)
+    if (!coordinate) return null
+
+    const stations = detail.Body?.Intensity?.Observation?.Pref
+        ?.flatMap(pref => pref.Area ?? [])
+        .flatMap(area => area.City ?? [])
+        .flatMap(city => city.IntensityStation ?? [])
+        .filter(station =>
+            typeof station.latlon?.lat === 'number' &&
+            typeof station.latlon?.lon === 'number'
+        )
+        .sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int))
+        .slice(0, 80) ?? []
+
+    const markers = [
+        `${coordinate.longitude},${coordinate.latitude},pm2rdm`,
+        ...stations.map(station =>
+            `${station.latlon?.lon},${station.latlon?.lat},${intensityMarkerStyle(station.Int)}`
+        ),
+    ].join('~')
+
+    return `https://static-maps.yandex.ru/1.x/?ll=${coordinate.longitude},${coordinate.latitude}&z=6&size=600,400&l=map&pt=${encodeURIComponent(markers)}`
+}
+
+function selectBestJmaItem(items: JmaQuakeListItem[]): JmaQuakeListItem | undefined {
+    return items
+        .filter(item => isValidJmaJsonPath(item.json))
+        .sort((a, b) => {
+            const aHasIntensityMap = a.json?.includes('VXSE5k') ? 1 : 0
+            const bHasIntensityMap = b.json?.includes('VXSE5k') ? 1 : 0
+            if (aHasIntensityMap !== bHasIntensityMap) return bHasIntensityMap - aHasIntensityMap
+            if (a.maxi && !b.maxi) return -1
+            if (!a.maxi && b.maxi) return 1
+            return String(b.ctt ?? '').localeCompare(String(a.ctt ?? ''))
+        })[0]
+}
+
+async function fetchJmaDetail(jsonPath: string): Promise<JmaQuakeDetail> {
+    const detailResponse = await fetch(`https://www.jma.go.jp/bosai/quake/data/${jsonPath}`)
+    return detailResponse.json() as Promise<JmaQuakeDetail>
+}
+
+async function findJmaDetailForEew(eew: P2PEewMessage): Promise<JmaQuakeDetail | null> {
+    const listResponse = await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')
+    const list = await listResponse.json() as JmaQuakeListItem[]
+    const hypocenter = eew.earthquake?.hypocenter
+    const normalizedOrigin = normalizeJmaTime(eew.earthquake?.originTime)
+    const magnitude = typeof hypocenter?.magnitude === 'number' ? hypocenter.magnitude.toFixed(1) : null
+
+    const candidates = list.filter(item => {
+        if (!isValidJmaJsonPath(item.json)) return false
+        if (eew.issue?.eventId && item.eid === eew.issue.eventId) return true
+
+        const sameTime = normalizedOrigin && normalizeJmaTime(item.at) === normalizedOrigin
+        const sameName = !hypocenter?.name || item.anm === hypocenter.name
+        const sameMagnitude = !magnitude || item.mag === magnitude
+        return Boolean(sameTime && sameName && sameMagnitude)
+    })
+
+    const best = selectBestJmaItem(candidates)
+    return best?.json ? fetchJmaDetail(best.json) : null
+}
+
 function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
     return (
         typeof jsonPath === 'string' &&
@@ -144,11 +256,12 @@ function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
     )
 }
 
-function buildEewEmbed(eew: P2PEewMessage): { embeds: EmbedBuilder[], files?: AttachmentBuilder[] } {
+async function buildEewEmbed(eew: P2PEewMessage): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
     const hypocenter = eew.earthquake?.hypocenter
     const maxScale = Math.max(...(eew.areas ?? []).map(area => area.scaleTo), 0)
     const scaleImage = localScaleImage(maxScale)
-    const mapImageUrl = staticMapImageUrl(hypocenter?.latitude, hypocenter?.longitude)
+    const jmaDetail = await findJmaDetailForEew(eew).catch(() => null)
+    const intensityMapUrl = jmaDetail ? buildJmaIntensityMapUrl(jmaDetail) : null
     const areas = [...(eew.areas ?? [])]
         .sort((a, b) => b.scaleTo - a.scaleTo)
         .slice(0, 8)
@@ -184,20 +297,20 @@ function buildEewEmbed(eew: P2PEewMessage): { embeds: EmbedBuilder[], files?: At
         embed.setThumbnail(`attachment://${scaleImage.name}`)
     }
 
-    if (mapImageUrl) {
-        embed.setImage(mapImageUrl)
+    if (intensityMapUrl) {
+        embed.setImage(intensityMapUrl)
     }
 
     return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] }
 }
 
-function buildJmaEmbed(detail: JmaQuakeDetail, jsonPath: string): { embeds: EmbedBuilder[], files?: AttachmentBuilder[] } {
+function buildJmaEmbed(detail: JmaQuakeDetail): { embeds: EmbedBuilder[], files?: AttachmentBuilder[] } {
     const earthquake = detail.Body?.Earthquake
     const hypocenter = earthquake?.Hypocenter?.Area
-    const imagePath = jsonPath.replace(/\.json$/, '.png')
     const maxScale = detail.Body?.Intensity?.Observation?.MaxInt
     const scaleImage = localScaleImage(maxScale)
     const coordinate = parseJmaCoordinate(hypocenter?.Coordinate)
+    const intensityMapUrl = buildJmaIntensityMapUrl(detail)
 
     const embed = new EmbedBuilder()
         .setTitle(detail.Head?.Title ?? '直近の地震情報')
@@ -211,8 +324,11 @@ function buildJmaEmbed(detail: JmaQuakeDetail, jsonPath: string): { embeds: Embe
             { name: '発生時刻', value: earthquake?.OriginTime ?? earthquake?.ArrivalTime ?? '不明', inline: true },
             { name: '発表時刻', value: detail.Head?.ReportDateTime ?? '不明', inline: true },
         )
-        .setImage(`https://www.jma.go.jp/bosai/quake/data/${imagePath}`)
         .setFooter({ text: 'Source: 気象庁' })
+
+    if (intensityMapUrl) {
+        embed.setImage(intensityMapUrl)
+    }
 
     if (coordinate) {
         embed.addFields({
@@ -237,7 +353,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         if (eewResponse.ok) {
             const eews = await eewResponse.json() as P2PEewMessage[]
             if (eews[0]) {
-                await interaction.editReply(buildEewEmbed(eews[0]))
+                await interaction.editReply(await buildEewEmbed(eews[0]))
                 return
             }
         }
@@ -254,7 +370,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         const detailResponse = await fetch(`https://www.jma.go.jp/bosai/quake/data/${latestPath}`)
         const detail = await detailResponse.json() as JmaQuakeDetail
 
-        await interaction.editReply(buildJmaEmbed(detail, latestPath))
+        await interaction.editReply(buildJmaEmbed(detail))
     } catch (error) {
         console.error(error)
         await interaction.editReply('地震情報の取得中にエラーが発生しました。')
