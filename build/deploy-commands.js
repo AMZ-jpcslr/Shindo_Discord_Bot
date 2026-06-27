@@ -14,11 +14,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const discord_js_1 = require("discord.js");
 const dotenv_1 = __importDefault(require("dotenv"));
-const ping_1 = require("./commands/ping");
-const lottery_1 = require("./commands/lottery");
-const shift_1 = require("./commands/shift");
-const set_eq_channel_1 = require("./commands/set_eq_channel");
 const get_eq_1 = require("./commands/get_eq");
+const lottery_1 = require("./commands/lottery");
+const ping_1 = require("./commands/ping");
+const set_eq_channel_1 = require("./commands/set_eq_channel");
+const shift_1 = require("./commands/shift");
 dotenv_1.default.config();
 const commands = [
     ping_1.data.toJSON(),
@@ -29,23 +29,32 @@ const commands = [
 ];
 const token = process.env.TOKEN;
 const clientId = process.env.CLIENT_ID;
+const guildId = process.env.GUILD_ID;
 if (!token) {
-    throw new Error('TOKEN が .env に設定されていません');
+    throw new Error('TOKEN が設定されていません');
 }
 if (!clientId) {
-    throw new Error('CLIENT_ID が .env に設定されていません');
+    throw new Error('CLIENT_ID が設定されていません');
 }
 const rest = new discord_js_1.REST({ version: '10' }).setToken(token);
 const applicationId = clientId;
 function main() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            console.log('スラッシュコマンドを登録中...');
+            if (guildId) {
+                const targetGuildId = guildId;
+                console.log(`スラッシュコマンドをギルド ${targetGuildId} に登録中...`);
+                yield rest.put(discord_js_1.Routes.applicationGuildCommands(applicationId, targetGuildId), { body: commands });
+                console.log('ギルドコマンド登録完了。通常はすぐ反映されます。');
+                return;
+            }
+            console.log('スラッシュコマンドをグローバル登録中...');
             yield rest.put(discord_js_1.Routes.applicationCommands(applicationId), { body: commands });
-            console.log('登録完了');
+            console.log('グローバルコマンド登録完了。反映には時間がかかる場合があります。');
         }
         catch (error) {
             console.error(error);
+            process.exitCode = 1;
         }
     });
 }
