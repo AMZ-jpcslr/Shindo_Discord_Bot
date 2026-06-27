@@ -1,4 +1,6 @@
-import { ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js'
+import { AttachmentBuilder, ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js'
+import fs from 'fs'
+import path from 'path'
 
 type P2PEewArea = {
     name: string
@@ -47,6 +49,7 @@ type JmaQuakeDetail = {
                 Area?: {
                     Name?: string
                     Depth?: string
+                    Coordinate?: string
                 }
             }
         }
@@ -85,6 +88,53 @@ function formatDepth(depth: number | string | undefined): string {
     return depth
 }
 
+function localScaleImage(scale: number | string | undefined): AttachmentBuilder | null {
+    const value = typeof scale === 'string' ? Number(scale) : scale
+    const fileNameByScale: Record<number, string> = {
+        10: 'nc300018.jpg',
+        20: 'nc300017.jpg',
+        30: 'nc300015.jpg',
+        40: 'nc300014.jpg',
+        45: 'nc300013.jpg',
+        50: 'nc300012.jpg',
+        55: 'nc300011.jpg',
+        60: 'nc300010.jpg',
+        70: 'nc300009.jpg',
+    }
+
+    const fileName = value ? fileNameByScale[value] : undefined
+    if (!fileName) return null
+
+    const filePath = [
+        path.join(process.cwd(), fileName),
+        path.join(__dirname, '..', fileName),
+        path.join(__dirname, '../..', fileName),
+    ].find(candidate => fs.existsSync(candidate))
+
+    if (!filePath) return null
+
+    return new AttachmentBuilder(filePath, { name: fileName })
+}
+
+function staticMapImageUrl(latitude?: number, longitude?: number): string | null {
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') return null
+
+    const marker = `${latitude},${longitude},red-pushpin`
+    return `https://staticmap.openstreetmap.de/staticmap.php?center=${latitude},${longitude}&zoom=6&size=600x400&markers=${encodeURIComponent(marker)}`
+}
+
+function parseJmaCoordinate(coordinate?: string): { latitude: number, longitude: number } | null {
+    if (!coordinate) return null
+
+    const match = coordinate.match(/([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)/)
+    if (!match) return null
+
+    return {
+        latitude: Number(match[1]),
+        longitude: Number(match[2]),
+    }
+}
+
 function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
     return (
         typeof jsonPath === 'string' &&
@@ -94,9 +144,11 @@ function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
     )
 }
 
-function buildEewEmbed(eew: P2PEewMessage): EmbedBuilder {
+function buildEewEmbed(eew: P2PEewMessage): { embeds: EmbedBuilder[], files?: AttachmentBuilder[] } {
     const hypocenter = eew.earthquake?.hypocenter
     const maxScale = Math.max(...(eew.areas ?? []).map(area => area.scaleTo), 0)
+    const scaleImage = localScaleImage(maxScale)
+    const mapImageUrl = staticMapImageUrl(hypocenter?.latitude, hypocenter?.longitude)
     const areas = [...(eew.areas ?? [])]
         .sort((a, b) => b.scaleTo - a.scaleTo)
         .slice(0, 8)
@@ -128,15 +180,26 @@ function buildEewEmbed(eew: P2PEewMessage): EmbedBuilder {
         })
     }
 
-    return embed
+    if (scaleImage) {
+        embed.setThumbnail(`attachment://${scaleImage.name}`)
+    }
+
+    if (mapImageUrl) {
+        embed.setImage(mapImageUrl)
+    }
+
+    return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] }
 }
 
-function buildJmaEmbed(detail: JmaQuakeDetail, jsonPath: string): EmbedBuilder {
+function buildJmaEmbed(detail: JmaQuakeDetail, jsonPath: string): { embeds: EmbedBuilder[], files?: AttachmentBuilder[] } {
     const earthquake = detail.Body?.Earthquake
     const hypocenter = earthquake?.Hypocenter?.Area
     const imagePath = jsonPath.replace(/\.json$/, '.png')
+    const maxScale = detail.Body?.Intensity?.Observation?.MaxInt
+    const scaleImage = localScaleImage(maxScale)
+    const coordinate = parseJmaCoordinate(hypocenter?.Coordinate)
 
-    return new EmbedBuilder()
+    const embed = new EmbedBuilder()
         .setTitle(detail.Head?.Title ?? '直近の地震情報')
         .setColor(0x2d6cdf)
         .setDescription(detail.Head?.Text || '気象庁から発表された直近の地震情報です。')
@@ -144,12 +207,26 @@ function buildJmaEmbed(detail: JmaQuakeDetail, jsonPath: string): EmbedBuilder {
             { name: '震源', value: hypocenter?.Name ?? '不明', inline: true },
             { name: '規模', value: earthquake?.Magnitude ? `M${earthquake.Magnitude}` : '不明', inline: true },
             { name: '深さ', value: formatDepth(hypocenter?.Depth), inline: true },
-            { name: '最大震度', value: scaleToString(detail.Body?.Intensity?.Observation?.MaxInt), inline: true },
+            { name: '最大震度', value: scaleToString(maxScale), inline: true },
             { name: '発生時刻', value: earthquake?.OriginTime ?? earthquake?.ArrivalTime ?? '不明', inline: true },
             { name: '発表時刻', value: detail.Head?.ReportDateTime ?? '不明', inline: true },
         )
         .setImage(`https://www.jma.go.jp/bosai/quake/data/${imagePath}`)
         .setFooter({ text: 'Source: 気象庁' })
+
+    if (coordinate) {
+        embed.addFields({
+            name: '地図',
+            value: `[震源付近を開く](https://www.google.com/maps?q=${coordinate.latitude},${coordinate.longitude})`,
+            inline: false,
+        })
+    }
+
+    if (scaleImage) {
+        embed.setThumbnail(`attachment://${scaleImage.name}`)
+    }
+
+    return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] }
 }
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -160,7 +237,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         if (eewResponse.ok) {
             const eews = await eewResponse.json() as P2PEewMessage[]
             if (eews[0]) {
-                await interaction.editReply({ embeds: [buildEewEmbed(eews[0])] })
+                await interaction.editReply(buildEewEmbed(eews[0]))
                 return
             }
         }
@@ -177,7 +254,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         const detailResponse = await fetch(`https://www.jma.go.jp/bosai/quake/data/${latestPath}`)
         const detail = await detailResponse.json() as JmaQuakeDetail
 
-        await interaction.editReply({ embeds: [buildJmaEmbed(detail, latestPath)] })
+        await interaction.editReply(buildJmaEmbed(detail, latestPath))
     } catch (error) {
         console.error(error)
         await interaction.editReply('地震情報の取得中にエラーが発生しました。')

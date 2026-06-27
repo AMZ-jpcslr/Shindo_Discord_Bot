@@ -108,6 +108,23 @@ function formatCoordinate(latitude, longitude) {
         return null;
     return `[震源付近を開く](https://www.google.com/maps?q=${latitude},${longitude})`;
 }
+function staticMapImageUrl(latitude, longitude) {
+    if (typeof latitude !== 'number' || typeof longitude !== 'number')
+        return null;
+    const marker = `${latitude},${longitude},red-pushpin`;
+    return `https://staticmap.openstreetmap.de/staticmap.php?center=${latitude},${longitude}&zoom=6&size=600x400&markers=${encodeURIComponent(marker)}`;
+}
+function parseJmaCoordinate(coordinate) {
+    if (!coordinate)
+        return null;
+    const match = coordinate.match(/([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)/);
+    if (!match)
+        return null;
+    return {
+        latitude: Number(match[1]),
+        longitude: Number(match[2]),
+    };
+}
 function jmaImageUrl(jsonPath) {
     return `https://www.jma.go.jp/bosai/quake/data/${jsonPath.replace(/\.json$/, '.png')}`;
 }
@@ -127,8 +144,12 @@ function localScaleImage(scale) {
     const fileName = value ? fileNameByScale[value] : undefined;
     if (!fileName)
         return null;
-    const filePath = path_1.default.join(__dirname, '../../', fileName);
-    if (!fs_1.default.existsSync(filePath))
+    const filePath = [
+        path_1.default.join(process.cwd(), fileName),
+        path_1.default.join(__dirname, '..', fileName),
+        path_1.default.join(__dirname, '../..', fileName),
+    ].find(candidate => fs_1.default.existsSync(candidate));
+    if (!filePath)
         return null;
     return new discord_js_1.AttachmentBuilder(filePath, { name: fileName });
 }
@@ -142,6 +163,7 @@ function buildEewEmbed(message) {
         .map(area => `${area.name}: ${scaleToString(area.scaleFrom)}${area.scaleFrom === area.scaleTo ? '' : `-${scaleToString(area.scaleTo)}`}`)
         .join('\n');
     const coordinateLink = formatCoordinate(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.latitude, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.longitude);
+    const mapImageUrl = staticMapImageUrl(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.latitude, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.longitude);
     const scaleImage = localScaleImage(maxScale);
     const title = message.cancelled ? '緊急地震速報 取消' : '緊急地震速報';
     const serial = ((_d = message.issue) === null || _d === void 0 ? void 0 : _d.serial) ? `第${message.issue.serial}報` : '速報';
@@ -161,6 +183,9 @@ function buildEewEmbed(message) {
     if (scaleImage) {
         embed.setThumbnail(`attachment://${scaleImage.name}`);
     }
+    if (mapImageUrl) {
+        embed.setImage(mapImageUrl);
+    }
     return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] };
 }
 function buildP2PQuakeEmbed(message) {
@@ -169,6 +194,7 @@ function buildP2PQuakeEmbed(message) {
     const hypocenter = quake === null || quake === void 0 ? void 0 : quake.hypocenter;
     const scaleImage = localScaleImage(quake === null || quake === void 0 ? void 0 : quake.maxScale);
     const coordinateLink = formatCoordinate(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.latitude, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.longitude);
+    const mapImageUrl = staticMapImageUrl(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.latitude, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.longitude);
     const observedPoints = [...((_a = message.points) !== null && _a !== void 0 ? _a : [])]
         .sort((a, b) => { var _a, _b; return ((_a = b.scale) !== null && _a !== void 0 ? _a : 0) - ((_b = a.scale) !== null && _b !== void 0 ? _b : 0); })
         .slice(0, 8)
@@ -189,6 +215,9 @@ function buildP2PQuakeEmbed(message) {
     if (scaleImage) {
         embed.setThumbnail(`attachment://${scaleImage.name}`);
     }
+    if (mapImageUrl) {
+        embed.setImage(mapImageUrl);
+    }
     return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] };
 }
 function isValidJmaJsonPath(jsonPath) {
@@ -202,6 +231,9 @@ function buildJmaQuakeEmbed(detail, jsonPath) {
     const earthquake = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake;
     const hypocenter = (_b = earthquake === null || earthquake === void 0 ? void 0 : earthquake.Hypocenter) === null || _b === void 0 ? void 0 : _b.Area;
     const maxScale = (_e = (_d = (_c = detail.Body) === null || _c === void 0 ? void 0 : _c.Intensity) === null || _d === void 0 ? void 0 : _d.Observation) === null || _e === void 0 ? void 0 : _e.MaxInt;
+    const coordinate = parseJmaCoordinate(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Coordinate);
+    const coordinateLink = formatCoordinate(coordinate === null || coordinate === void 0 ? void 0 : coordinate.latitude, coordinate === null || coordinate === void 0 ? void 0 : coordinate.longitude);
+    const scaleImage = localScaleImage(maxScale);
     const text = (_f = detail.Head) === null || _f === void 0 ? void 0 : _f.Text;
     const embed = new discord_js_1.EmbedBuilder()
         .setTitle((_h = (_g = detail.Head) === null || _g === void 0 ? void 0 : _g.Title) !== null && _h !== void 0 ? _h : '地震情報')
@@ -211,7 +243,13 @@ function buildJmaQuakeEmbed(detail, jsonPath) {
         .setImage(jmaImageUrl(jsonPath))
         .setFooter({ text: 'Source: 気象庁' })
         .setTimestamp(new Date());
-    return embed;
+    if (coordinateLink) {
+        embed.addFields({ name: '地図', value: coordinateLink, inline: true });
+    }
+    if (scaleImage) {
+        embed.setThumbnail(`attachment://${scaleImage.name}`);
+    }
+    return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] };
 }
 function pollJmaQuake(client) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -231,7 +269,7 @@ function pollJmaQuake(client) {
         if (!detailResponse.ok)
             throw new Error(`JMA detail fetch failed: ${detailResponse.status}`);
         const detail = yield detailResponse.json();
-        yield sendToConfiguredChannels(client, { embeds: [buildJmaQuakeEmbed(detail, latestPath)] });
+        yield sendToConfiguredChannels(client, buildJmaQuakeEmbed(detail, latestPath));
         saveLatestIds(Object.assign(Object.assign({}, latestIds), { quake: latestPath }));
     });
 }

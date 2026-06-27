@@ -212,6 +212,25 @@ function formatCoordinate(latitude?: number, longitude?: number): string | null 
     return `[震源付近を開く](https://www.google.com/maps?q=${latitude},${longitude})`
 }
 
+function staticMapImageUrl(latitude?: number, longitude?: number): string | null {
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') return null
+
+    const marker = `${latitude},${longitude},red-pushpin`
+    return `https://staticmap.openstreetmap.de/staticmap.php?center=${latitude},${longitude}&zoom=6&size=600x400&markers=${encodeURIComponent(marker)}`
+}
+
+function parseJmaCoordinate(coordinate?: string): { latitude: number, longitude: number } | null {
+    if (!coordinate) return null
+
+    const match = coordinate.match(/([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)/)
+    if (!match) return null
+
+    return {
+        latitude: Number(match[1]),
+        longitude: Number(match[2]),
+    }
+}
+
 function jmaImageUrl(jsonPath: string): string {
     return `https://www.jma.go.jp/bosai/quake/data/${jsonPath.replace(/\.json$/, '.png')}`
 }
@@ -233,8 +252,13 @@ function localScaleImage(scale: number | string | undefined): AttachmentBuilder 
     const fileName = value ? fileNameByScale[value] : undefined
     if (!fileName) return null
 
-    const filePath = path.join(__dirname, '../../', fileName)
-    if (!fs.existsSync(filePath)) return null
+    const filePath = [
+        path.join(process.cwd(), fileName),
+        path.join(__dirname, '..', fileName),
+        path.join(__dirname, '../..', fileName),
+    ].find(candidate => fs.existsSync(candidate))
+
+    if (!filePath) return null
 
     return new AttachmentBuilder(filePath, { name: fileName })
 }
@@ -249,6 +273,7 @@ function buildEewEmbed(message: P2PEewMessage): { embeds: EmbedBuilder[], files?
         .join('\n')
 
     const coordinateLink = formatCoordinate(hypocenter?.latitude, hypocenter?.longitude)
+    const mapImageUrl = staticMapImageUrl(hypocenter?.latitude, hypocenter?.longitude)
     const scaleImage = localScaleImage(maxScale)
     const title = message.cancelled ? '緊急地震速報 取消' : '緊急地震速報'
     const serial = message.issue?.serial ? `第${message.issue.serial}報` : '速報'
@@ -280,6 +305,10 @@ function buildEewEmbed(message: P2PEewMessage): { embeds: EmbedBuilder[], files?
         embed.setThumbnail(`attachment://${scaleImage.name}`)
     }
 
+    if (mapImageUrl) {
+        embed.setImage(mapImageUrl)
+    }
+
     return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] }
 }
 
@@ -288,6 +317,7 @@ function buildP2PQuakeEmbed(message: P2PQuakeMessage): { embeds: EmbedBuilder[],
     const hypocenter = quake?.hypocenter
     const scaleImage = localScaleImage(quake?.maxScale)
     const coordinateLink = formatCoordinate(hypocenter?.latitude, hypocenter?.longitude)
+    const mapImageUrl = staticMapImageUrl(hypocenter?.latitude, hypocenter?.longitude)
     const observedPoints = [...(message.points ?? [])]
         .sort((a, b) => (b.scale ?? 0) - (a.scale ?? 0))
         .slice(0, 8)
@@ -320,6 +350,10 @@ function buildP2PQuakeEmbed(message: P2PQuakeMessage): { embeds: EmbedBuilder[],
         embed.setThumbnail(`attachment://${scaleImage.name}`)
     }
 
+    if (mapImageUrl) {
+        embed.setImage(mapImageUrl)
+    }
+
     return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] }
 }
 
@@ -332,10 +366,13 @@ function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
     )
 }
 
-function buildJmaQuakeEmbed(detail: JmaQuakeDetail, jsonPath: string): EmbedBuilder {
+function buildJmaQuakeEmbed(detail: JmaQuakeDetail, jsonPath: string): { embeds: EmbedBuilder[], files?: AttachmentBuilder[] } {
     const earthquake = detail.Body?.Earthquake
     const hypocenter = earthquake?.Hypocenter?.Area
     const maxScale = detail.Body?.Intensity?.Observation?.MaxInt
+    const coordinate = parseJmaCoordinate(hypocenter?.Coordinate)
+    const coordinateLink = formatCoordinate(coordinate?.latitude, coordinate?.longitude)
+    const scaleImage = localScaleImage(maxScale)
     const text = detail.Head?.Text
 
     const embed = new EmbedBuilder()
@@ -354,7 +391,15 @@ function buildJmaQuakeEmbed(detail: JmaQuakeDetail, jsonPath: string): EmbedBuil
         .setFooter({ text: 'Source: 気象庁' })
         .setTimestamp(new Date())
 
-    return embed
+    if (coordinateLink) {
+        embed.addFields({ name: '地図', value: coordinateLink, inline: true })
+    }
+
+    if (scaleImage) {
+        embed.setThumbnail(`attachment://${scaleImage.name}`)
+    }
+
+    return scaleImage ? { embeds: [embed], files: [scaleImage] } : { embeds: [embed] }
 }
 
 async function pollJmaQuake(client: Client) {
@@ -373,7 +418,7 @@ async function pollJmaQuake(client: Client) {
     if (!detailResponse.ok) throw new Error(`JMA detail fetch failed: ${detailResponse.status}`)
 
     const detail = await detailResponse.json() as JmaQuakeDetail
-    await sendToConfiguredChannels(client, { embeds: [buildJmaQuakeEmbed(detail, latestPath)] })
+    await sendToConfiguredChannels(client, buildJmaQuakeEmbed(detail, latestPath))
 
     saveLatestIds({ ...latestIds, quake: latestPath })
 }
