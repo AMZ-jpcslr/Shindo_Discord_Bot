@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "ts-node src/main.ts",
     "deploy-commands": "ts-node src/deploy-commands.ts",
-    "railway:start": "npm run deploy-commands && npm start",
+    "railway:start": "node build/deploy-commands.js && npm start",
     "start": "node build/main.js",
     "compile": "tsc -p ."
   },
