@@ -101,6 +101,32 @@ function intensityColor(intensity?: string): string {
     }
 }
 
+function intensityLabel(intensity?: string): string {
+    switch (intensity) {
+        case '7': return '7'
+        case '6+': return '6+'
+        case '6-': return '6-'
+        case '5+': return '5+'
+        case '5-': return '5-'
+        case '4': return '4'
+        case '3': return '3'
+        case '2': return '2'
+        case '1': return '1'
+        default: return ''
+    }
+}
+
+function intensityTextColor(intensity?: string): string {
+    switch (intensity) {
+        case '5-':
+        case '4':
+        case '1':
+            return '#101418'
+        default:
+            return '#ffffff'
+    }
+}
+
 function zoomFromMagnitude(magnitude?: string): number {
     const value = Number(magnitude)
     if (!Number.isFinite(value)) return 7
@@ -196,9 +222,20 @@ function buildOverlaySvg(
 
     const stationSvg = [...stationByCell.values()].map(({ station, x, y }) => {
         const radius = intensityRank(station.Int) >= 5 ? 8 : 6
+        const label = intensityLabel(station.Int)
+        const fontSize = label.length >= 2 ? 8 : 10
 
         return `
             <circle cx="${x}" cy="${y}" r="${radius}" fill="${intensityColor(station.Int)}" stroke="#101418" stroke-width="2"/>
+            <text
+                x="${x}"
+                y="${y + 3.5}"
+                fill="${intensityTextColor(station.Int)}"
+                font-size="${fontSize}"
+                font-weight="800"
+                text-anchor="middle"
+                font-family="DejaVu Sans, Arial, sans-serif"
+            >${label}</text>
         `
     }).join('')
 
