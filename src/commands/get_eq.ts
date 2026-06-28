@@ -3,35 +3,6 @@ import fs from 'fs'
 import path from 'path'
 import { createIntensityMapAttachment } from '../intensity_map'
 
-type P2PEewArea = {
-    name: string
-    scaleFrom: number
-    scaleTo: number
-    arrivalTime: string | null
-}
-
-type P2PEewMessage = {
-    id: string
-    cancelled: boolean
-    time: string
-    issue?: {
-        eventId?: string
-        serial?: string
-        time?: string
-    }
-    earthquake?: {
-        originTime?: string
-        hypocenter?: {
-            name?: string
-            depth?: number
-            magnitude?: number
-            latitude?: number
-            longitude?: number
-        }
-    }
-    areas?: P2PEewArea[]
-}
-
 type JmaQuakeListItem = {
     ctt?: string
     eid?: string
@@ -39,6 +10,7 @@ type JmaQuakeListItem = {
     anm?: string
     mag?: string
     maxi?: string
+    ttl?: string
     json?: string
 }
 
@@ -84,7 +56,16 @@ type JmaQuakeDetail = {
 
 export const data = new SlashCommandBuilder()
     .setName('get_eq')
-    .setDescription('直近の緊急地震速報または地震情報を確認します')
+    .setDescription('直近の地震情報を確認します')
+
+function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
+    return (
+        typeof jsonPath === 'string' &&
+        jsonPath.endsWith('.json') &&
+        !jsonPath.startsWith('/') &&
+        !jsonPath.includes('..')
+    )
+}
 
 function scaleToString(scale: number | string | undefined): string {
     const value = typeof scale === 'string' ? Number(scale) : scale
@@ -99,7 +80,7 @@ function scaleToString(scale: number | string | undefined): string {
         case 55: return '6弱'
         case 60: return '6強'
         case 70: return '7'
-        default: return scale ? String(scale) : '不明'
+        default: return scale ? String(scale).replace('+', '強').replace('-', '弱') : '不明'
     }
 }
 
@@ -149,113 +130,63 @@ function parseJmaCoordinate(coordinate?: string): { latitude: number, longitude:
     }
 }
 
-function normalizeJmaTime(time?: string): string | null {
-    if (!time) return null
-    return time.replace(/\//g, '-').replace(' ', 'T').slice(0, 16)
+function jmaScaleToP2PScale(scale?: string): number | undefined {
+    switch (scale) {
+        case '1': return 10
+        case '2': return 20
+        case '3': return 30
+        case '4': return 40
+        case '5-': return 45
+        case '5+': return 50
+        case '6-': return 55
+        case '6+': return 60
+        case '7': return 70
+        default: return undefined
+    }
 }
 
-function selectBestJmaItem(items: JmaQuakeListItem[]): JmaQuakeListItem | undefined {
-    return items
+function reportTimeValue(item: JmaQuakeListItem): number {
+    const source = item.ctt ?? item.at ?? ''
+    if (/^\d{14}$/.test(source)) {
+        return Number(source)
+    }
+    const dateValue = Date.parse(source)
+    return Number.isFinite(dateValue) ? dateValue : 0
+}
+
+function pickLatestEventItem(list: JmaQuakeListItem[]): JmaQuakeListItem | undefined {
+    return list
         .filter(item => isValidJmaJsonPath(item.json))
-        .sort((a, b) => {
-            const aHasIntensityMap = a.json?.includes('VXSE5k') ? 1 : 0
-            const bHasIntensityMap = b.json?.includes('VXSE5k') ? 1 : 0
-            if (aHasIntensityMap !== bHasIntensityMap) return bHasIntensityMap - aHasIntensityMap
-            if (a.maxi && !b.maxi) return -1
-            if (!a.maxi && b.maxi) return 1
-            return String(b.ctt ?? '').localeCompare(String(a.ctt ?? ''))
-        })[0]
+        .sort((a, b) => reportTimeValue(b) - reportTimeValue(a))[0]
+}
+
+function pickBestDetailItemForEvent(list: JmaQuakeListItem[], eventId?: string): JmaQuakeListItem | undefined {
+    const candidates = list.filter(item =>
+        isValidJmaJsonPath(item.json) &&
+        (!eventId || item.eid === eventId)
+    )
+
+    return candidates.sort((a, b) => {
+        const aHasIntensityDetail = a.json?.includes('VXSE5k') ? 1 : 0
+        const bHasIntensityDetail = b.json?.includes('VXSE5k') ? 1 : 0
+        if (aHasIntensityDetail !== bHasIntensityDetail) return bHasIntensityDetail - aHasIntensityDetail
+        if (a.maxi && !b.maxi) return -1
+        if (!a.maxi && b.maxi) return 1
+        return reportTimeValue(b) - reportTimeValue(a)
+    })[0]
 }
 
 async function fetchJmaDetail(jsonPath: string): Promise<JmaQuakeDetail> {
-    const detailResponse = await fetch(`https://www.jma.go.jp/bosai/quake/data/${jsonPath}`)
-    return detailResponse.json() as Promise<JmaQuakeDetail>
-}
-
-async function findJmaDetailForEew(eew: P2PEewMessage): Promise<JmaQuakeDetail | null> {
-    const listResponse = await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')
-    const list = await listResponse.json() as JmaQuakeListItem[]
-    const hypocenter = eew.earthquake?.hypocenter
-    const normalizedOrigin = normalizeJmaTime(eew.earthquake?.originTime)
-    const magnitude = typeof hypocenter?.magnitude === 'number' ? hypocenter.magnitude.toFixed(1) : null
-
-    const candidates = list.filter(item => {
-        if (!isValidJmaJsonPath(item.json)) return false
-        if (eew.issue?.eventId && item.eid === eew.issue.eventId) return true
-
-        const sameTime = normalizedOrigin && normalizeJmaTime(item.at) === normalizedOrigin
-        const sameName = !hypocenter?.name || item.anm === hypocenter.name
-        const sameMagnitude = !magnitude || item.mag === magnitude
-        return Boolean(sameTime && sameName && sameMagnitude)
-    })
-
-    const best = selectBestJmaItem(candidates)
-    return best?.json ? fetchJmaDetail(best.json) : null
-}
-
-function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
-    return (
-        typeof jsonPath === 'string' &&
-        jsonPath.endsWith('.json') &&
-        !jsonPath.startsWith('/') &&
-        !jsonPath.includes('..')
-    )
-}
-
-async function buildEewEmbed(eew: P2PEewMessage): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
-    const hypocenter = eew.earthquake?.hypocenter
-    const maxScale = Math.max(...(eew.areas ?? []).map(area => area.scaleTo), 0)
-    const scaleImage = localScaleImage(maxScale)
-    const jmaDetail = await findJmaDetailForEew(eew).catch(() => null)
-    const intensityMap = jmaDetail ? await createIntensityMapAttachment(jmaDetail, 'intensity-map.png') : null
-    const areas = [...(eew.areas ?? [])]
-        .sort((a, b) => b.scaleTo - a.scaleTo)
-        .slice(0, 8)
-        .map(area => `${area.name}: ${scaleToString(area.scaleFrom)}${area.scaleFrom === area.scaleTo ? '' : `-${scaleToString(area.scaleTo)}`}`)
-        .join('\n')
-
-    const embed = new EmbedBuilder()
-        .setTitle(eew.cancelled ? '直近の緊急地震速報 取消' : '直近の緊急地震速報')
-        .setColor(eew.cancelled ? 0x808080 : 0xff2d2d)
-        .addFields(
-            { name: '震源', value: hypocenter?.name ?? '不明', inline: true },
-            { name: '規模', value: hypocenter?.magnitude ? `M${hypocenter.magnitude}` : '不明', inline: true },
-            { name: '深さ', value: formatDepth(hypocenter?.depth), inline: true },
-            { name: '最大予測震度', value: maxScale > 0 ? scaleToString(maxScale) : '不明', inline: true },
-            { name: '発生時刻', value: eew.earthquake?.originTime ?? '不明', inline: true },
-            { name: '発表時刻', value: eew.issue?.time ?? eew.time ?? '不明', inline: true },
-        )
-        .setFooter({ text: 'Source: P2P地震情報 / 気象庁' })
-
-    if (areas) {
-        embed.addFields({ name: '主な予測地域', value: areas, inline: false })
-    }
-
-    if (typeof hypocenter?.latitude === 'number' && typeof hypocenter.longitude === 'number') {
-        embed.addFields({
-            name: '地図',
-            value: `[震源付近を開く](https://www.google.com/maps?q=${hypocenter.latitude},${hypocenter.longitude})`,
-            inline: false,
-        })
-    }
-
-    if (scaleImage) {
-        embed.setThumbnail(`attachment://${scaleImage.name}`)
-    }
-
-    if (intensityMap) {
-        embed.setImage('attachment://intensity-map.png')
-    }
-
-    const files = [scaleImage, intensityMap].filter((file): file is AttachmentBuilder => Boolean(file))
-    return files.length ? { embeds: [embed], files } : { embeds: [embed] }
+    const response = await fetch(`https://www.jma.go.jp/bosai/quake/data/${jsonPath}`)
+    if (!response.ok) throw new Error(`JMA detail fetch failed: ${response.status}`)
+    return response.json() as Promise<JmaQuakeDetail>
 }
 
 async function buildJmaEmbed(detail: JmaQuakeDetail): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
     const earthquake = detail.Body?.Earthquake
     const hypocenter = earthquake?.Hypocenter?.Area
     const maxScale = detail.Body?.Intensity?.Observation?.MaxInt
-    const scaleImage = localScaleImage(maxScale)
+    const scaleImage = localScaleImage(jmaScaleToP2PScale(maxScale))
     const coordinate = parseJmaCoordinate(hypocenter?.Coordinate)
     const intensityMap = await createIntensityMapAttachment(detail, 'intensity-map.png')
 
@@ -297,27 +228,19 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true })
 
     try {
-        const eewResponse = await fetch('https://api.p2pquake.net/v2/history?codes=556&limit=1')
-        if (eewResponse.ok) {
-            const eews = await eewResponse.json() as P2PEewMessage[]
-            if (eews[0]) {
-                await interaction.editReply(await buildEewEmbed(eews[0]))
-                return
-            }
-        }
-
         const listResponse = await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')
-        const list = await listResponse.json() as JmaQuakeListItem[]
-        const latestPath = list.find(item => isValidJmaJsonPath(item.json))?.json
+        if (!listResponse.ok) throw new Error(`JMA list fetch failed: ${listResponse.status}`)
 
-        if (!latestPath) {
+        const list = await listResponse.json() as JmaQuakeListItem[]
+        const latestEvent = pickLatestEventItem(list)
+        const bestDetail = pickBestDetailItemForEvent(list, latestEvent?.eid)
+
+        if (!bestDetail?.json) {
             await interaction.editReply('直近の地震情報が見つかりませんでした。')
             return
         }
 
-        const detailResponse = await fetch(`https://www.jma.go.jp/bosai/quake/data/${latestPath}`)
-        const detail = await detailResponse.json() as JmaQuakeDetail
-
+        const detail = await fetchJmaDetail(bestDetail.json)
         await interaction.editReply(await buildJmaEmbed(detail))
     } catch (error) {
         console.error(error)
