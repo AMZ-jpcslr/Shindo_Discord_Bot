@@ -14,6 +14,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.loadEqChannels = loadEqChannels;
 exports.saveEqChannels = saveEqChannels;
+exports.loadEqThresholds = loadEqThresholds;
+exports.saveEqThresholds = saveEqThresholds;
+exports.scaleRank = scaleRank;
 exports.startEqAutoNotify = startEqAutoNotify;
 const discord_js_1 = require("discord.js");
 const fs_1 = __importDefault(require("fs"));
@@ -22,6 +25,7 @@ const ws_1 = __importDefault(require("ws"));
 const intensity_map_1 = require("./intensity_map");
 const DATA_DIR = path_1.default.join(__dirname, '../../data');
 const CHANNELS_PATH = path_1.default.join(DATA_DIR, 'eq_channels.json');
+const THRESHOLDS_PATH = path_1.default.join(DATA_DIR, 'eq_thresholds.json');
 const LATEST_IDS_PATH = path_1.default.join(DATA_DIR, 'latest_eq_ids.json');
 const P2P_WS_URL = 'wss://api.p2pquake.net/v2/ws';
 const JMA_QUAKE_LIST_URL = 'https://www.jma.go.jp/bosai/quake/data/list.json';
@@ -43,6 +47,21 @@ function saveEqChannels(channels) {
     ensureDataDir();
     fs_1.default.writeFileSync(CHANNELS_PATH, JSON.stringify(channels, null, 2), 'utf8');
 }
+function loadEqThresholds() {
+    if (!fs_1.default.existsSync(THRESHOLDS_PATH))
+        return {};
+    try {
+        return JSON.parse(fs_1.default.readFileSync(THRESHOLDS_PATH, 'utf8'));
+    }
+    catch (error) {
+        console.error('通知震度しきい値の読み込みに失敗しました:', error);
+        return {};
+    }
+}
+function saveEqThresholds(thresholds) {
+    ensureDataDir();
+    fs_1.default.writeFileSync(THRESHOLDS_PATH, JSON.stringify(thresholds, null, 2), 'utf8');
+}
 function loadLatestIds() {
     if (!fs_1.default.existsSync(LATEST_IDS_PATH))
         return {};
@@ -60,15 +79,20 @@ function saveLatestIds(latestIds) {
 function isSendableChannel(channel) {
     return Boolean(channel && 'send' in channel && typeof channel.send === 'function');
 }
-function sendToConfiguredChannels(client, payload) {
+function sendToConfiguredChannels(client, payload, maxScale) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         const channels = loadEqChannels();
+        const thresholds = loadEqThresholds();
+        const eventScale = scaleRank(maxScale);
         for (const [guildId, channelId] of Object.entries(channels)) {
+            const threshold = (_a = thresholds[guildId]) !== null && _a !== void 0 ? _a : 0;
+            if (threshold > 0 && eventScale < threshold)
+                continue;
             const guild = client.guilds.cache.get(guildId);
             if (!guild)
                 continue;
-            const channel = (_a = guild.channels.cache.get(channelId)) !== null && _a !== void 0 ? _a : yield guild.channels.fetch(channelId).catch(() => null);
+            const channel = (_b = guild.channels.cache.get(channelId)) !== null && _b !== void 0 ? _b : yield guild.channels.fetch(channelId).catch(() => null);
             if (!isSendableChannel(channel))
                 continue;
             yield channel.send(payload).catch((error) => {
@@ -90,6 +114,41 @@ function scaleToString(scale) {
         case 60: return '6強';
         case 70: return '7';
         default: return scale ? String(scale) : '不明';
+    }
+}
+function scaleRank(scale) {
+    if (typeof scale === 'number') {
+        if (scale >= 70)
+            return 70;
+        if (scale >= 60)
+            return 60;
+        if (scale >= 55)
+            return 55;
+        if (scale >= 50)
+            return 50;
+        if (scale >= 45)
+            return 45;
+        if (scale >= 40)
+            return 40;
+        if (scale >= 30)
+            return 30;
+        if (scale >= 20)
+            return 20;
+        if (scale >= 10)
+            return 10;
+        return 0;
+    }
+    switch (scale) {
+        case '7': return 70;
+        case '6+': return 60;
+        case '6-': return 55;
+        case '5+': return 50;
+        case '5-': return 45;
+        case '4': return 40;
+        case '3': return 30;
+        case '2': return 20;
+        case '1': return 10;
+        default: return 0;
     }
 }
 function formatDepth(depth) {
@@ -318,7 +377,7 @@ function buildJmaQuakeEmbed(detail) {
 }
 function pollJmaQuake(client) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a;
+        var _a, _b, _c, _d;
         const list = yield fetchJmaList();
         const latestPath = (_a = list.find(item => isValidJmaJsonPath(item.json))) === null || _a === void 0 ? void 0 : _a.json;
         if (!latestPath)
@@ -327,7 +386,7 @@ function pollJmaQuake(client) {
         if (latestIds.quake === latestPath)
             return;
         const detail = yield fetchJmaDetail(latestPath);
-        yield sendToConfiguredChannels(client, yield buildJmaQuakeEmbed(detail));
+        yield sendToConfiguredChannels(client, yield buildJmaQuakeEmbed(detail), (_d = (_c = (_b = detail.Body) === null || _b === void 0 ? void 0 : _b.Intensity) === null || _c === void 0 ? void 0 : _c.Observation) === null || _d === void 0 ? void 0 : _d.MaxInt);
         saveLatestIds(Object.assign(Object.assign({}, latestIds), { quake: latestPath }));
     });
 }
@@ -339,6 +398,7 @@ function shouldNotifyP2PMessage(message) {
 }
 function handleP2PMessage(client, rawData) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
         const message = JSON.parse(rawData.toString());
         if (!shouldNotifyP2PMessage(message))
             return;
@@ -346,13 +406,13 @@ function handleP2PMessage(client, rawData) {
         if (message.code === 556) {
             if (latestIds.eew === message.id)
                 return;
-            yield sendToConfiguredChannels(client, yield buildEewEmbed(message));
+            yield sendToConfiguredChannels(client, yield buildEewEmbed(message), Math.max(...((_a = message.areas) !== null && _a !== void 0 ? _a : []).map(area => area.scaleTo), 0));
             saveLatestIds(Object.assign(Object.assign({}, latestIds), { eew: message.id }));
             return;
         }
         if (latestIds.quake === message.id)
             return;
-        yield sendToConfiguredChannels(client, yield buildP2PQuakeEmbed(message));
+        yield sendToConfiguredChannels(client, yield buildP2PQuakeEmbed(message), (_b = message.earthquake) === null || _b === void 0 ? void 0 : _b.maxScale);
         saveLatestIds(Object.assign(Object.assign({}, latestIds), { quake: message.id }));
     });
 }

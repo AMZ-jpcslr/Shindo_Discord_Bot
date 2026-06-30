@@ -4,6 +4,7 @@ import * as getEqCommand from './commands/get_eq'
 import * as lotteryCommand from './commands/lottery'
 import * as pingCommand from './commands/ping'
 import * as setEqChannelCommand from './commands/set_eq_channel'
+import * as setEqThresholdCommand from './commands/set_eq_threshold'
 import * as shiftCommand from './commands/shift'
 import { startEqAutoNotify } from './eq_notify'
 
@@ -60,6 +61,9 @@ client.on('interactionCreate', async (interaction) => {
                 break
             case 'set_eq_channel':
                 await setEqChannelCommand.execute(interaction)
+                break
+            case 'set_eq_threshold':
+                await setEqThresholdCommand.execute(interaction)
                 break
             case 'get_eq':
                 await getEqCommand.execute(interaction)

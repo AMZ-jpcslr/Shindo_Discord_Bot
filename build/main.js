@@ -51,6 +51,7 @@ const getEqCommand = __importStar(require("./commands/get_eq"));
 const lotteryCommand = __importStar(require("./commands/lottery"));
 const pingCommand = __importStar(require("./commands/ping"));
 const setEqChannelCommand = __importStar(require("./commands/set_eq_channel"));
+const setEqThresholdCommand = __importStar(require("./commands/set_eq_threshold"));
 const shiftCommand = __importStar(require("./commands/shift"));
 const eq_notify_1 = require("./eq_notify");
 dotenv_1.default.config();
@@ -100,6 +101,9 @@ client.on('interactionCreate', (interaction) => __awaiter(void 0, void 0, void 0
                 break;
             case 'set_eq_channel':
                 yield setEqChannelCommand.execute(interaction);
+                break;
+            case 'set_eq_threshold':
+                yield setEqThresholdCommand.execute(interaction);
                 break;
             case 'get_eq':
                 yield getEqCommand.execute(interaction);

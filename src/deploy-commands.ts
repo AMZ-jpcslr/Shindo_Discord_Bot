@@ -4,6 +4,7 @@ import { data as getEqData } from './commands/get_eq'
 import { data as lotteryData } from './commands/lottery'
 import { data as pingData } from './commands/ping'
 import { data as setEqChannelData } from './commands/set_eq_channel'
+import { data as setEqThresholdData } from './commands/set_eq_threshold'
 import { data as shiftData } from './commands/shift'
 
 dotenv.config()
@@ -13,6 +14,7 @@ const commands = [
     lotteryData.toJSON(),
     shiftData.toJSON(),
     setEqChannelData.toJSON(),
+    setEqThresholdData.toJSON(),
     getEqData.toJSON(),
 ]
 

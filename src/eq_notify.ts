@@ -11,11 +11,13 @@ import { createIntensityMapAttachment } from './intensity_map'
 
 const DATA_DIR = path.join(__dirname, '../../data')
 const CHANNELS_PATH = path.join(DATA_DIR, 'eq_channels.json')
+const THRESHOLDS_PATH = path.join(DATA_DIR, 'eq_thresholds.json')
 const LATEST_IDS_PATH = path.join(DATA_DIR, 'latest_eq_ids.json')
 const P2P_WS_URL = 'wss://api.p2pquake.net/v2/ws'
 const JMA_QUAKE_LIST_URL = 'https://www.jma.go.jp/bosai/quake/data/list.json'
 
 type ChannelMap = Record<string, string>
+type ThresholdMap = Record<string, number>
 type LatestIds = {
     eew?: string
     quake?: string
@@ -155,6 +157,22 @@ export function saveEqChannels(channels: ChannelMap) {
     fs.writeFileSync(CHANNELS_PATH, JSON.stringify(channels, null, 2), 'utf8')
 }
 
+export function loadEqThresholds(): ThresholdMap {
+    if (!fs.existsSync(THRESHOLDS_PATH)) return {}
+
+    try {
+        return JSON.parse(fs.readFileSync(THRESHOLDS_PATH, 'utf8')) as ThresholdMap
+    } catch (error) {
+        console.error('通知震度しきい値の読み込みに失敗しました:', error)
+        return {}
+    }
+}
+
+export function saveEqThresholds(thresholds: ThresholdMap) {
+    ensureDataDir()
+    fs.writeFileSync(THRESHOLDS_PATH, JSON.stringify(thresholds, null, 2), 'utf8')
+}
+
 function loadLatestIds(): LatestIds {
     if (!fs.existsSync(LATEST_IDS_PATH)) return {}
 
@@ -181,10 +199,16 @@ function isSendableChannel(channel: GuildBasedChannel | null | undefined): chann
 async function sendToConfiguredChannels(
     client: Client,
     payload: { embeds: EmbedBuilder[], files?: AttachmentBuilder[] },
+    maxScale: number | string | undefined,
 ) {
     const channels = loadEqChannels()
+    const thresholds = loadEqThresholds()
+    const eventScale = scaleRank(maxScale)
 
     for (const [guildId, channelId] of Object.entries(channels)) {
+        const threshold = thresholds[guildId] ?? 0
+        if (threshold > 0 && eventScale < threshold) continue
+
         const guild = client.guilds.cache.get(guildId)
         if (!guild) continue
 
@@ -214,6 +238,34 @@ function scaleToString(scale: number | string | undefined): string {
         case 60: return '6強'
         case 70: return '7'
         default: return scale ? String(scale) : '不明'
+    }
+}
+
+export function scaleRank(scale: number | string | undefined): number {
+    if (typeof scale === 'number') {
+        if (scale >= 70) return 70
+        if (scale >= 60) return 60
+        if (scale >= 55) return 55
+        if (scale >= 50) return 50
+        if (scale >= 45) return 45
+        if (scale >= 40) return 40
+        if (scale >= 30) return 30
+        if (scale >= 20) return 20
+        if (scale >= 10) return 10
+        return 0
+    }
+
+    switch (scale) {
+        case '7': return 70
+        case '6+': return 60
+        case '6-': return 55
+        case '5+': return 50
+        case '5-': return 45
+        case '4': return 40
+        case '3': return 30
+        case '2': return 20
+        case '1': return 10
+        default: return 0
     }
 }
 
@@ -497,7 +549,11 @@ async function pollJmaQuake(client: Client) {
     if (latestIds.quake === latestPath) return
 
     const detail = await fetchJmaDetail(latestPath)
-    await sendToConfiguredChannels(client, await buildJmaQuakeEmbed(detail))
+    await sendToConfiguredChannels(
+        client,
+        await buildJmaQuakeEmbed(detail),
+        detail.Body?.Intensity?.Observation?.MaxInt,
+    )
 
     saveLatestIds({ ...latestIds, quake: latestPath })
 }
@@ -515,13 +571,17 @@ async function handleP2PMessage(client: Client, rawData: WebSocket.RawData) {
     const latestIds = loadLatestIds()
     if (message.code === 556) {
         if (latestIds.eew === message.id) return
-        await sendToConfiguredChannels(client, await buildEewEmbed(message))
+        await sendToConfiguredChannels(
+            client,
+            await buildEewEmbed(message),
+            Math.max(...(message.areas ?? []).map(area => area.scaleTo), 0),
+        )
         saveLatestIds({ ...latestIds, eew: message.id })
         return
     }
 
     if (latestIds.quake === message.id) return
-    await sendToConfiguredChannels(client, await buildP2PQuakeEmbed(message))
+    await sendToConfiguredChannels(client, await buildP2PQuakeEmbed(message), message.earthquake?.maxScale)
     saveLatestIds({ ...latestIds, quake: message.id })
 }
 

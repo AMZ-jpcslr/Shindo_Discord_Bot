@@ -18,6 +18,7 @@ const get_eq_1 = require("./commands/get_eq");
 const lottery_1 = require("./commands/lottery");
 const ping_1 = require("./commands/ping");
 const set_eq_channel_1 = require("./commands/set_eq_channel");
+const set_eq_threshold_1 = require("./commands/set_eq_threshold");
 const shift_1 = require("./commands/shift");
 dotenv_1.default.config();
 const commands = [
@@ -25,6 +26,7 @@ const commands = [
     lottery_1.data.toJSON(),
     shift_1.data.toJSON(),
     set_eq_channel_1.data.toJSON(),
+    set_eq_threshold_1.data.toJSON(),
     get_eq_1.data.toJSON(),
 ];
 const token = process.env.TOKEN;
