@@ -127,6 +127,64 @@ function intensityTextColor(intensity?: string): string {
     }
 }
 
+function digitSegments(digit: string): string[] {
+    switch (digit) {
+        case '1': return ['b', 'c']
+        case '2': return ['a', 'b', 'g', 'e', 'd']
+        case '3': return ['a', 'b', 'g', 'c', 'd']
+        case '4': return ['f', 'g', 'b', 'c']
+        case '5': return ['a', 'f', 'g', 'c', 'd']
+        case '6': return ['a', 'f', 'g', 'e', 'c', 'd']
+        case '7': return ['a', 'b', 'c']
+        default: return []
+    }
+}
+
+function segmentLine(segment: string): [number, number, number, number] {
+    switch (segment) {
+        case 'a': return [-2.2, -4, 2.2, -4]
+        case 'b': return [2.8, -3.4, 2.8, -0.4]
+        case 'c': return [2.8, 0.8, 2.8, 3.8]
+        case 'd': return [-2.2, 4.4, 2.2, 4.4]
+        case 'e': return [-2.8, 0.8, -2.8, 3.8]
+        case 'f': return [-2.8, -3.4, -2.8, -0.4]
+        case 'g': return [-2.2, 0.2, 2.2, 0.2]
+        default: return [0, 0, 0, 0]
+    }
+}
+
+function digitSvg(digit: string, x: number, y: number, color: string): string {
+    return digitSegments(digit).map(segment => {
+        const [x1, y1, x2, y2] = segmentLine(segment)
+        return `<line x1="${x + x1}" y1="${y + y1}" x2="${x + x2}" y2="${y + y2}" stroke="${color}" stroke-width="1.7" stroke-linecap="round"/>`
+    }).join('')
+}
+
+function signSvg(sign: string, x: number, y: number, color: string): string {
+    if (sign === '+') {
+        return `
+            <line x1="${x - 1.8}" y1="${y}" x2="${x + 1.8}" y2="${y}" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="${x}" y1="${y - 1.8}" x2="${x}" y2="${y + 1.8}" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/>
+        `
+    }
+
+    if (sign === '-') {
+        return `<line x1="${x - 1.8}" y1="${y}" x2="${x + 1.8}" y2="${y}" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/>`
+    }
+
+    return ''
+}
+
+function intensityLabelSvg(label: string, x: number, y: number, color: string): string {
+    if (!label) return ''
+    if (label.length === 1) return digitSvg(label, x, y, color)
+
+    return `
+        ${digitSvg(label[0], x - 2.2, y, color)}
+        ${signSvg(label[1], x + 4.3, y - 0.2, color)}
+    `
+}
+
 function zoomFromMagnitude(magnitude?: string): number {
     const value = Number(magnitude)
     if (!Number.isFinite(value)) return 7
@@ -223,19 +281,11 @@ function buildOverlaySvg(
     const stationSvg = [...stationByCell.values()].map(({ station, x, y }) => {
         const radius = intensityRank(station.Int) >= 5 ? 8 : 6
         const label = intensityLabel(station.Int)
-        const fontSize = label.length >= 2 ? 8 : 10
+        const textColor = intensityTextColor(station.Int)
 
         return `
             <circle cx="${x}" cy="${y}" r="${radius}" fill="${intensityColor(station.Int)}" stroke="#101418" stroke-width="2"/>
-            <text
-                x="${x}"
-                y="${y + 3.5}"
-                fill="${intensityTextColor(station.Int)}"
-                font-size="${fontSize}"
-                font-weight="800"
-                text-anchor="middle"
-                font-family="DejaVu Sans, Arial, sans-serif"
-            >${label}</text>
+            ${intensityLabelSvg(label, x, y, textColor)}
         `
     }).join('')
 
