@@ -65,30 +65,6 @@ function intensityColor(intensity) {
         default: return '#808080';
     }
 }
-function intensityLabel(intensity) {
-    switch (intensity) {
-        case '7': return '7';
-        case '6+': return '6+';
-        case '6-': return '6-';
-        case '5+': return '5+';
-        case '5-': return '5-';
-        case '4': return '4';
-        case '3': return '3';
-        case '2': return '2';
-        case '1': return '1';
-        default: return '';
-    }
-}
-function intensityTextColor(intensity) {
-    switch (intensity) {
-        case '5-':
-        case '4':
-        case '1':
-            return '#101418';
-        default:
-            return '#ffffff';
-    }
-}
 function digitSegments(digit) {
     switch (digit) {
         case '1': return ['b', 'c'];
@@ -139,6 +115,27 @@ function intensityLabelSvg(label, x, y, color) {
     return `
         ${digitSvg(label[0], x - 2.2, y, color)}
         ${signSvg(label[1], x + 4.3, y - 0.2, color)}
+    `;
+}
+function buildLegendSvg() {
+    const entries = ['1', '2', '3', '4', '5-', '5+', '6-', '6+', '7'];
+    const rowHeight = 18;
+    const legendX = 12;
+    const legendY = 12;
+    const legendWidth = 82;
+    const legendHeight = 18 + entries.length * rowHeight;
+    const rows = entries.map((label, index) => {
+        const y = legendY + 22 + index * rowHeight;
+        return `
+            <rect x="${legendX + 10}" y="${y - 8}" width="16" height="12" rx="2" fill="${intensityColor(label)}" stroke="#101418" stroke-width="1.5"/>
+            ${intensityLabelSvg(label, legendX + 46, y - 2, '#ffffff')}
+        `;
+    }).join('');
+    return `
+        <g>
+            <rect x="${legendX}" y="${legendY}" width="${legendWidth}" height="${legendHeight}" rx="4" fill="rgba(12, 16, 18, 0.84)" stroke="#ffffff" stroke-opacity="0.5"/>
+            ${rows}
+        </g>
     `;
 }
 function zoomFromMagnitude(magnitude) {
@@ -228,11 +225,8 @@ function buildOverlaySvg(detail, epicenter, stations, zoom) {
     }
     const stationSvg = [...stationByCell.values()].map(({ station, x, y }) => {
         const radius = intensityRank(station.Int) >= 5 ? 8 : 6;
-        const label = intensityLabel(station.Int);
-        const textColor = intensityTextColor(station.Int);
         return `
             <circle cx="${x}" cy="${y}" r="${radius}" fill="${intensityColor(station.Int)}" stroke="#101418" stroke-width="2"/>
-            ${intensityLabelSvg(label, x, y, textColor)}
         `;
     }).join('');
     const epicenterPoint = project(epicenter, zoom);
@@ -248,6 +242,7 @@ function buildOverlaySvg(detail, epicenter, stations, zoom) {
                 <line x1="-8" y1="-8" x2="8" y2="8" stroke="#ffffff" stroke-width="1" stroke-linecap="round"/>
                 <line x1="8" y1="-8" x2="-8" y2="8" stroke="#ffffff" stroke-width="1" stroke-linecap="round"/>
             </g>
+            ${buildLegendSvg()}
         </svg>
     `;
     return Buffer.from(svg);
