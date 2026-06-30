@@ -22,6 +22,7 @@ const discord_js_1 = require("discord.js");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const ws_1 = __importDefault(require("ws"));
+const disaster_map_1 = require("./disaster_map");
 const intensity_map_1 = require("./intensity_map");
 const DATA_DIR = path_1.default.join(__dirname, '../../data');
 const CHANNELS_PATH = path_1.default.join(DATA_DIR, 'eq_channels.json');
@@ -29,6 +30,10 @@ const THRESHOLDS_PATH = path_1.default.join(DATA_DIR, 'eq_thresholds.json');
 const LATEST_IDS_PATH = path_1.default.join(DATA_DIR, 'latest_eq_ids.json');
 const P2P_WS_URL = 'wss://api.p2pquake.net/v2/ws';
 const JMA_QUAKE_LIST_URL = 'https://www.jma.go.jp/bosai/quake/data/list.json';
+const JMA_TSUNAMI_LIST_URL = 'https://www.jma.go.jp/bosai/tsunami/data/list.json';
+const JMA_WARNING_MAP_URL = 'https://www.jma.go.jp/bosai/warning/data/warning/map.json';
+const JMA_AREA_URL = 'https://www.jma.go.jp/bosai/common/const/area.json';
+const FLOOD_WARNING_CODES = new Set(['04', '18']);
 function ensureDataDir() {
     fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -97,6 +102,23 @@ function sendToConfiguredChannels(client, payload, maxScale) {
                 continue;
             yield channel.send(payload).catch((error) => {
                 console.error(`通知送信に失敗しました: guild=${guildId}, channel=${channelId}`, error);
+            });
+        }
+    });
+}
+function sendDisasterToConfiguredChannels(client, payload) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        const channels = loadEqChannels();
+        for (const [guildId, channelId] of Object.entries(channels)) {
+            const guild = client.guilds.cache.get(guildId);
+            if (!guild)
+                continue;
+            const channel = (_a = guild.channels.cache.get(channelId)) !== null && _a !== void 0 ? _a : yield guild.channels.fetch(channelId).catch(() => null);
+            if (!isSendableChannel(channel))
+                continue;
+            yield channel.send(payload).catch((error) => {
+                console.error(`災害情報の通知送信に失敗しました: guild=${guildId}, channel=${channelId}`, error);
             });
         }
     });
@@ -217,6 +239,39 @@ function fetchJmaDetail(jsonPath) {
         return detailResponse.json();
     });
 }
+function fetchJmaTsunamiList() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const response = yield fetch(JMA_TSUNAMI_LIST_URL);
+        if (!response.ok)
+            throw new Error(`JMA tsunami list fetch failed: ${response.status}`);
+        return response.json();
+    });
+}
+function fetchJmaTsunamiDetail(jsonPath) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const detailUrl = `https://www.jma.go.jp/bosai/tsunami/data/${jsonPath}`;
+        const detailResponse = yield fetch(detailUrl);
+        if (!detailResponse.ok)
+            throw new Error(`JMA tsunami detail fetch failed: ${detailResponse.status}`);
+        return detailResponse.json();
+    });
+}
+function fetchJmaWarningMap() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const response = yield fetch(JMA_WARNING_MAP_URL);
+        if (!response.ok)
+            throw new Error(`JMA warning map fetch failed: ${response.status}`);
+        return response.json();
+    });
+}
+function fetchJmaAreaConst() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const response = yield fetch(JMA_AREA_URL);
+        if (!response.ok)
+            throw new Error(`JMA area const fetch failed: ${response.status}`);
+        return response.json();
+    });
+}
 function findJmaDetailForP2P(eventId, originTime, hypocenterName, magnitude) {
     return __awaiter(this, void 0, void 0, function* () {
         const list = yield fetchJmaList();
@@ -237,6 +292,124 @@ function findJmaDetailForP2P(eventId, originTime, hypocenterName, magnitude) {
             return null;
         return fetchJmaDetail(best.json);
     });
+}
+function tsunamiColor(kindName) {
+    if (!kindName)
+        return '#2d6cdf';
+    if (kindName.includes('大津波'))
+        return '#d900ff';
+    if (kindName.includes('津波警報'))
+        return '#ff1f1f';
+    if (kindName.includes('津波注意報'))
+        return '#ffff00';
+    return '#2d6cdf';
+}
+function collectTsunamiPoints(detail) {
+    var _a, _b, _c, _d;
+    const items = (_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Tsunami) === null || _b === void 0 ? void 0 : _b.Forecast) === null || _c === void 0 ? void 0 : _c.Item) !== null && _d !== void 0 ? _d : [];
+    return items.flatMap((item, index) => {
+        var _a, _b, _c;
+        const areaName = (_a = item.Area) === null || _a === void 0 ? void 0 : _a.Name;
+        if (!areaName)
+            return [];
+        const coordinate = (0, disaster_map_1.pointForAreaName)(areaName);
+        if (!coordinate)
+            return [];
+        return [{
+                label: String(index + 1),
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                color: tsunamiColor((_c = (_b = item.Category) === null || _b === void 0 ? void 0 : _b.Kind) === null || _c === void 0 ? void 0 : _c.Name),
+            }];
+    });
+}
+function flattenAreaEntries(areaConst) {
+    var _a, _b, _c, _d, _e;
+    return Object.assign(Object.assign(Object.assign(Object.assign(Object.assign({}, ((_a = areaConst.centers) !== null && _a !== void 0 ? _a : {})), ((_b = areaConst.offices) !== null && _b !== void 0 ? _b : {})), ((_c = areaConst.class10s) !== null && _c !== void 0 ? _c : {})), ((_d = areaConst.class15s) !== null && _d !== void 0 ? _d : {})), ((_e = areaConst.class20s) !== null && _e !== void 0 ? _e : {}));
+}
+function parentMap(areaConst) {
+    var _a;
+    const parents = {};
+    for (const [code, entry] of Object.entries(flattenAreaEntries(areaConst))) {
+        for (const child of (_a = entry.children) !== null && _a !== void 0 ? _a : []) {
+            parents[child] = code;
+        }
+    }
+    return parents;
+}
+function areaNameChain(code, areaConst) {
+    var _a;
+    const entries = flattenAreaEntries(areaConst);
+    const parents = parentMap(areaConst);
+    const names = [];
+    let current = code;
+    for (let depth = 0; current && depth < 6; depth += 1) {
+        const name = (_a = entries[current]) === null || _a === void 0 ? void 0 : _a.name;
+        if (name)
+            names.push(name);
+        current = parents[current];
+    }
+    return names;
+}
+function areaPointForCode(code, areaConst) {
+    const names = areaNameChain(code, areaConst);
+    for (const name of names) {
+        const point = (0, disaster_map_1.pointForAreaName)(name);
+        if (point)
+            return { name, point };
+    }
+    return null;
+}
+function collectFloodAreas(warningMap, areaConst) {
+    var _a, _b, _c, _d;
+    const areas = new Map();
+    for (const report of warningMap) {
+        for (const areaType of (_a = report.areaTypes) !== null && _a !== void 0 ? _a : []) {
+            for (const area of (_b = areaType.areas) !== null && _b !== void 0 ? _b : []) {
+                if (!area.code)
+                    continue;
+                const floodWarnings = ((_c = area.warnings) !== null && _c !== void 0 ? _c : []).filter(warning => warning.code &&
+                    FLOOD_WARNING_CODES.has(warning.code) &&
+                    warning.status !== '解除');
+                if (!floodWarnings.length)
+                    continue;
+                const resolved = areaPointForCode(area.code, areaConst);
+                if (!resolved)
+                    continue;
+                const key = `${resolved.point.latitude.toFixed(2)},${resolved.point.longitude.toFixed(2)}`;
+                const current = (_d = areas.get(key)) !== null && _d !== void 0 ? _d : {
+                    code: area.code,
+                    name: resolved.name,
+                    statuses: new Set(),
+                    point: resolved.point,
+                };
+                for (const warning of floodWarnings) {
+                    current.statuses.add(warning.code === '04' ? '洪水警報' : '洪水注意報');
+                }
+                areas.set(key, current);
+            }
+        }
+    }
+    return [...areas.values()].map(area => ({
+        code: area.code,
+        name: area.name,
+        statuses: [...area.statuses].sort(),
+        point: area.point,
+    }));
+}
+function floodSignature(areas, warningMap) {
+    const reportTimes = warningMap
+        .map(report => { var _a; return (_a = report.reportDatetime) !== null && _a !== void 0 ? _a : ''; })
+        .sort();
+    const latestReportTime = reportTimes.length ? reportTimes[reportTimes.length - 1] : '';
+    const areaSignature = areas
+        .map(area => `${area.name}:${area.statuses.join('/')}`)
+        .sort()
+        .join('|');
+    return `${latestReportTime}:${areaSignature}`;
+}
+function floodColor(statuses) {
+    return statuses.includes('洪水警報') ? '#ff1f1f' : '#ffff00';
 }
 function localScaleImage(scale) {
     const value = typeof scale === 'string' ? Number(scale) : scale;
@@ -375,6 +548,68 @@ function buildJmaQuakeEmbed(detail) {
         return files.length ? { embeds: [embed], files } : { embeds: [embed] };
     });
 }
+function buildJmaTsunamiEmbed(detail) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
+        const items = (_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Tsunami) === null || _b === void 0 ? void 0 : _b.Forecast) === null || _c === void 0 ? void 0 : _c.Item) !== null && _d !== void 0 ? _d : [];
+        const earthquake = (_f = (_e = detail.Body) === null || _e === void 0 ? void 0 : _e.Earthquake) === null || _f === void 0 ? void 0 : _f[0];
+        const points = collectTsunamiPoints(detail);
+        const disasterMap = yield (0, disaster_map_1.createDisasterMapAttachment)(points, 'tsunami-map.png');
+        const affectedAreas = items
+            .slice(0, 12)
+            .map(item => {
+            var _a, _b, _c, _d, _e, _f;
+            const area = (_b = (_a = item.Area) === null || _a === void 0 ? void 0 : _a.Name) !== null && _b !== void 0 ? _b : '不明';
+            const kind = (_e = (_d = (_c = item.Category) === null || _c === void 0 ? void 0 : _c.Kind) === null || _d === void 0 ? void 0 : _d.Name) !== null && _e !== void 0 ? _e : '津波情報';
+            const height = ((_f = item.MaxHeight) === null || _f === void 0 ? void 0 : _f.TsunamiHeight) ? ` / 予想高さ ${item.MaxHeight.TsunamiHeight}m` : '';
+            return `${area}: ${kind}${height}`;
+        })
+            .join('\n');
+        const embed = new discord_js_1.EmbedBuilder()
+            .setTitle((_h = (_g = detail.Head) === null || _g === void 0 ? void 0 : _g.Title) !== null && _h !== void 0 ? _h : '津波情報')
+            .setColor(0xff1f1f)
+            .setDescription((_o = (_l = (_k = (_j = detail.Head) === null || _j === void 0 ? void 0 : _j.Headline) === null || _k === void 0 ? void 0 : _k.Text) !== null && _l !== void 0 ? _l : (_m = detail.Body) === null || _m === void 0 ? void 0 : _m.Text) !== null && _o !== void 0 ? _o : '気象庁から津波に関する情報が発表されました。')
+            .addFields({ name: '震源', value: (_r = (_q = (_p = earthquake === null || earthquake === void 0 ? void 0 : earthquake.Hypocenter) === null || _p === void 0 ? void 0 : _p.Area) === null || _q === void 0 ? void 0 : _q.Name) !== null && _r !== void 0 ? _r : '不明', inline: true }, { name: '規模', value: formatMagnitude(earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude), inline: true }, { name: '発表時刻', value: (_t = (_s = detail.Head) === null || _s === void 0 ? void 0 : _s.ReportDateTime) !== null && _t !== void 0 ? _t : '不明', inline: true })
+            .setFooter({ text: 'Source: 気象庁' })
+            .setTimestamp(new Date());
+        if (affectedAreas) {
+            embed.addFields({ name: '対象地域', value: affectedAreas.slice(0, 1024), inline: false });
+        }
+        if (disasterMap) {
+            embed.setImage('attachment://tsunami-map.png');
+        }
+        return disasterMap ? { embeds: [embed], files: [disasterMap] } : { embeds: [embed] };
+    });
+}
+function buildJmaFloodEmbed(areas) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const points = areas.map((area, index) => ({
+            label: String(index + 1),
+            latitude: area.point.latitude,
+            longitude: area.point.longitude,
+            color: floodColor(area.statuses),
+        }));
+        const disasterMap = yield (0, disaster_map_1.createDisasterMapAttachment)(points, 'flood-map.png');
+        const affectedAreas = areas
+            .slice(0, 16)
+            .map(area => `${area.name}: ${area.statuses.join(' / ')}`)
+            .join('\n');
+        const embed = new discord_js_1.EmbedBuilder()
+            .setTitle('洪水警報・注意報')
+            .setColor(areas.some(area => area.statuses.includes('洪水警報')) ? 0xff1f1f : 0xffff00)
+            .setDescription('気象庁から洪水に関する警報・注意報が発表されています。')
+            .addFields({ name: '対象地域数', value: `${areas.length}`, inline: true }, { name: '取得時刻', value: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }), inline: true })
+            .setFooter({ text: 'Source: 気象庁' })
+            .setTimestamp(new Date());
+        if (affectedAreas) {
+            embed.addFields({ name: '対象地域', value: affectedAreas.slice(0, 1024), inline: false });
+        }
+        if (disasterMap) {
+            embed.setImage('attachment://flood-map.png');
+        }
+        return disasterMap ? { embeds: [embed], files: [disasterMap] } : { embeds: [embed] };
+    });
+}
 function pollJmaQuake(client) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c, _d;
@@ -388,6 +623,38 @@ function pollJmaQuake(client) {
         const detail = yield fetchJmaDetail(latestPath);
         yield sendToConfiguredChannels(client, yield buildJmaQuakeEmbed(detail), (_d = (_c = (_b = detail.Body) === null || _b === void 0 ? void 0 : _b.Intensity) === null || _c === void 0 ? void 0 : _c.Observation) === null || _d === void 0 ? void 0 : _d.MaxInt);
         saveLatestIds(Object.assign(Object.assign({}, latestIds), { quake: latestPath }));
+    });
+}
+function pollJmaTsunami(client) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        const list = yield fetchJmaTsunamiList();
+        const latestPath = (_a = list.find(item => isValidJmaJsonPath(item.json))) === null || _a === void 0 ? void 0 : _a.json;
+        if (!latestPath)
+            return;
+        const latestIds = loadLatestIds();
+        if (latestIds.tsunami === latestPath)
+            return;
+        const detail = yield fetchJmaTsunamiDetail(latestPath);
+        yield sendDisasterToConfiguredChannels(client, yield buildJmaTsunamiEmbed(detail));
+        saveLatestIds(Object.assign(Object.assign({}, latestIds), { tsunami: latestPath }));
+    });
+}
+function pollJmaFlood(client) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const [warningMap, areaConst] = yield Promise.all([
+            fetchJmaWarningMap(),
+            fetchJmaAreaConst(),
+        ]);
+        const areas = collectFloodAreas(warningMap, areaConst);
+        if (!areas.length)
+            return;
+        const signature = floodSignature(areas, warningMap);
+        const latestIds = loadLatestIds();
+        if (latestIds.flood === signature)
+            return;
+        yield sendDisasterToConfiguredChannels(client, yield buildJmaFloodEmbed(areas));
+        saveLatestIds(Object.assign(Object.assign({}, latestIds), { flood: signature }));
     });
 }
 function shouldNotifyP2PMessage(message) {
@@ -441,8 +708,25 @@ function startP2PWebSocket(client) {
     };
     connect();
 }
+function startJmaDisasterAutoNotify(client) {
+    pollJmaTsunami(client).catch((error) => {
+        console.error('気象庁津波情報の初回確認でエラーが発生しました:', error);
+    });
+    pollJmaFlood(client).catch((error) => {
+        console.error('気象庁洪水情報の初回確認でエラーが発生しました:', error);
+    });
+    setInterval(() => {
+        pollJmaTsunami(client).catch((error) => {
+            console.error('気象庁津波情報の自動確認でエラーが発生しました:', error);
+        });
+        pollJmaFlood(client).catch((error) => {
+            console.error('気象庁洪水情報の自動確認でエラーが発生しました:', error);
+        });
+    }, 60 * 1000);
+}
 function startEqAutoNotify(client) {
     startP2PWebSocket(client);
+    startJmaDisasterAutoNotify(client);
     pollJmaQuake(client).catch((error) => {
         console.error('気象庁地震情報の初回確認でエラーが発生しました:', error);
     });

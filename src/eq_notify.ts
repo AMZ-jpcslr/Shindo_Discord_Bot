@@ -7,6 +7,7 @@ import {
 import fs from 'fs'
 import path from 'path'
 import WebSocket from 'ws'
+import { createDisasterMapAttachment, pointForAreaName, type DisasterMapPoint } from './disaster_map'
 import { createIntensityMapAttachment } from './intensity_map'
 
 const DATA_DIR = path.join(__dirname, '../../data')
@@ -15,12 +16,18 @@ const THRESHOLDS_PATH = path.join(DATA_DIR, 'eq_thresholds.json')
 const LATEST_IDS_PATH = path.join(DATA_DIR, 'latest_eq_ids.json')
 const P2P_WS_URL = 'wss://api.p2pquake.net/v2/ws'
 const JMA_QUAKE_LIST_URL = 'https://www.jma.go.jp/bosai/quake/data/list.json'
+const JMA_TSUNAMI_LIST_URL = 'https://www.jma.go.jp/bosai/tsunami/data/list.json'
+const JMA_WARNING_MAP_URL = 'https://www.jma.go.jp/bosai/warning/data/warning/map.json'
+const JMA_AREA_URL = 'https://www.jma.go.jp/bosai/common/const/area.json'
+const FLOOD_WARNING_CODES = new Set(['04', '18'])
 
 type ChannelMap = Record<string, string>
 type ThresholdMap = Record<string, number>
 type LatestIds = {
     eew?: string
     quake?: string
+    tsunami?: string
+    flood?: string
 }
 
 type P2PEewArea = {
@@ -137,6 +144,90 @@ type JmaQuakeDetail = {
     }
 }
 
+type JmaTsunamiListItem = {
+    ctt?: string
+    eid?: string
+    rdt?: string
+    ttl?: string
+    ift?: string
+    at?: string
+    anm?: string
+    mag?: string
+    kind?: {
+        code?: string
+        kind?: string
+    }[]
+    json?: string
+}
+
+type JmaTsunamiDetail = {
+    Head?: {
+        Title?: string
+        ReportDateTime?: string
+        Headline?: {
+            Text?: string
+        }
+    }
+    Body?: {
+        Tsunami?: {
+            Forecast?: {
+                Item?: {
+                    Area?: {
+                        Name?: string
+                        Code?: string
+                    }
+                    Category?: {
+                        Kind?: {
+                            Name?: string
+                            Code?: string
+                        }
+                    }
+                    MaxHeight?: {
+                        TsunamiHeight?: string
+                    }
+                }[]
+            }
+        }
+        Earthquake?: {
+            OriginTime?: string
+            Hypocenter?: {
+                Area?: {
+                    Name?: string
+                    Coordinate?: string
+                }
+            }
+            Magnitude?: string
+        }[]
+        Text?: string
+    }
+}
+
+type JmaWarningMapItem = {
+    reportDatetime?: string
+    areaTypes?: {
+        areas?: {
+            code?: string
+            warnings?: {
+                code?: string
+                status?: string
+            }[]
+        }[]
+    }[]
+}
+
+type JmaAreaEntry = {
+    name?: string
+    children?: string[]
+}
+
+type JmaAreaConst = {
+    centers?: Record<string, JmaAreaEntry>
+    offices?: Record<string, JmaAreaEntry>
+    class10s?: Record<string, JmaAreaEntry>
+    class15s?: Record<string, JmaAreaEntry>
+    class20s?: Record<string, JmaAreaEntry>
+}
+
 function ensureDataDir() {
     fs.mkdirSync(DATA_DIR, { recursive: true })
 }
@@ -220,6 +311,28 @@ async function sendToConfiguredChannels(
 
         await channel.send(payload).catch((error: unknown) => {
             console.error(`通知送信に失敗しました: guild=${guildId}, channel=${channelId}`, error)
+        })
+    }
+}
+
+async function sendDisasterToConfiguredChannels(
+    client: Client,
+    payload: { embeds: EmbedBuilder[], files?: AttachmentBuilder[] },
+) {
+    const channels = loadEqChannels()
+
+    for (const [guildId, channelId] of Object.entries(channels)) {
+        const guild = client.guilds.cache.get(guildId)
+        if (!guild) continue
+
+        const channel =
+            guild.channels.cache.get(channelId) ??
+            await guild.channels.fetch(channelId).catch(() => null)
+
+        if (!isSendableChannel(channel)) continue
+
+        await channel.send(payload).catch((error: unknown) => {
+            console.error(`災害情報の通知送信に失敗しました: guild=${guildId}, channel=${channelId}`, error)
         })
     }
 }
@@ -328,6 +441,31 @@ async function fetchJmaDetail(jsonPath: string): Promise<JmaQuakeDetail> {
     return detailResponse.json() as Promise<JmaQuakeDetail>
 }
 
+async function fetchJmaTsunamiList(): Promise<JmaTsunamiListItem[]> {
+    const response = await fetch(JMA_TSUNAMI_LIST_URL)
+    if (!response.ok) throw new Error(`JMA tsunami list fetch failed: ${response.status}`)
+    return response.json() as Promise<JmaTsunamiListItem[]>
+}
+
+async function fetchJmaTsunamiDetail(jsonPath: string): Promise<JmaTsunamiDetail> {
+    const detailUrl = `https://www.jma.go.jp/bosai/tsunami/data/${jsonPath}`
+    const detailResponse = await fetch(detailUrl)
+    if (!detailResponse.ok) throw new Error(`JMA tsunami detail fetch failed: ${detailResponse.status}`)
+    return detailResponse.json() as Promise<JmaTsunamiDetail>
+}
+
+async function fetchJmaWarningMap(): Promise<JmaWarningMapItem[]> {
+    const response = await fetch(JMA_WARNING_MAP_URL)
+    if (!response.ok) throw new Error(`JMA warning map fetch failed: ${response.status}`)
+    return response.json() as Promise<JmaWarningMapItem[]>
+}
+
+async function fetchJmaAreaConst(): Promise<JmaAreaConst> {
+    const response = await fetch(JMA_AREA_URL)
+    if (!response.ok) throw new Error(`JMA area const fetch failed: ${response.status}`)
+    return response.json() as Promise<JmaAreaConst>
+}
+
 async function findJmaDetailForP2P(
     eventId?: string,
     originTime?: string,
@@ -352,6 +490,147 @@ async function findJmaDetailForP2P(
     if (!best?.json) return null
 
     return fetchJmaDetail(best.json)
+}
+
+function tsunamiColor(kindName?: string): string {
+    if (!kindName) return '#2d6cdf'
+    if (kindName.includes('大津波')) return '#d900ff'
+    if (kindName.includes('津波警報')) return '#ff1f1f'
+    if (kindName.includes('津波注意報')) return '#ffff00'
+    return '#2d6cdf'
+}
+
+function collectTsunamiPoints(detail: JmaTsunamiDetail): DisasterMapPoint[] {
+    const items = detail.Body?.Tsunami?.Forecast?.Item ?? []
+
+    return items.flatMap((item, index) => {
+        const areaName = item.Area?.Name
+        if (!areaName) return []
+
+        const coordinate = pointForAreaName(areaName)
+        if (!coordinate) return []
+
+        return [{
+            label: String(index + 1),
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            color: tsunamiColor(item.Category?.Kind?.Name),
+        }]
+    })
+}
+
+function flattenAreaEntries(areaConst: JmaAreaConst): Record<string, JmaAreaEntry> {
+    return {
+        ...(areaConst.centers ?? {}),
+        ...(areaConst.offices ?? {}),
+        ...(areaConst.class10s ?? {}),
+        ...(areaConst.class15s ?? {}),
+        ...(areaConst.class20s ?? {}),
+    }
+}
+
+function parentMap(areaConst: JmaAreaConst): Record<string, string> {
+    const parents: Record<string, string> = {}
+    for (const [code, entry] of Object.entries(flattenAreaEntries(areaConst))) {
+        for (const child of entry.children ?? []) {
+            parents[child] = code
+        }
+    }
+    return parents
+}
+
+function areaNameChain(code: string, areaConst: JmaAreaConst): string[] {
+    const entries = flattenAreaEntries(areaConst)
+    const parents = parentMap(areaConst)
+    const names: string[] = []
+    let current: string | undefined = code
+
+    for (let depth = 0; current && depth < 6; depth += 1) {
+        const name = entries[current]?.name
+        if (name) names.push(name)
+        current = parents[current]
+    }
+
+    return names
+}
+
+function areaPointForCode(code: string, areaConst: JmaAreaConst): { name: string, point: { latitude: number, longitude: number } } | null {
+    const names = areaNameChain(code, areaConst)
+    for (const name of names) {
+        const point = pointForAreaName(name)
+        if (point) return { name, point }
+    }
+
+    return null
+}
+
+function collectFloodAreas(warningMap: JmaWarningMapItem[], areaConst: JmaAreaConst): {
+    code: string
+    name: string
+    statuses: string[]
+    point: { latitude: number, longitude: number }
+}[] {
+    const areas = new Map<string, {
+        code: string
+        name: string
+        statuses: Set<string>
+        point: { latitude: number, longitude: number }
+    }>()
+
+    for (const report of warningMap) {
+        for (const areaType of report.areaTypes ?? []) {
+            for (const area of areaType.areas ?? []) {
+                if (!area.code) continue
+
+                const floodWarnings = (area.warnings ?? []).filter(warning =>
+                    warning.code &&
+                    FLOOD_WARNING_CODES.has(warning.code) &&
+                    warning.status !== '解除'
+                )
+                if (!floodWarnings.length) continue
+
+                const resolved = areaPointForCode(area.code, areaConst)
+                if (!resolved) continue
+
+                const key = `${resolved.point.latitude.toFixed(2)},${resolved.point.longitude.toFixed(2)}`
+                const current = areas.get(key) ?? {
+                    code: area.code,
+                    name: resolved.name,
+                    statuses: new Set<string>(),
+                    point: resolved.point,
+                }
+
+                for (const warning of floodWarnings) {
+                    current.statuses.add(warning.code === '04' ? '洪水警報' : '洪水注意報')
+                }
+                areas.set(key, current)
+            }
+        }
+    }
+
+    return [...areas.values()].map(area => ({
+        code: area.code,
+        name: area.name,
+        statuses: [...area.statuses].sort(),
+        point: area.point,
+    }))
+}
+
+function floodSignature(areas: { name: string, statuses: string[] }[], warningMap: JmaWarningMapItem[]): string {
+    const reportTimes = warningMap
+        .map(report => report.reportDatetime ?? '')
+        .sort()
+    const latestReportTime = reportTimes.length ? reportTimes[reportTimes.length - 1] : ''
+    const areaSignature = areas
+        .map(area => `${area.name}:${area.statuses.join('/')}`)
+        .sort()
+        .join('|')
+
+    return `${latestReportTime}:${areaSignature}`
+}
+
+function floodColor(statuses: string[]): string {
+    return statuses.includes('洪水警報') ? '#ff1f1f' : '#ffff00'
 }
 
 function localScaleImage(scale: number | string | undefined): AttachmentBuilder | null {
@@ -540,6 +819,81 @@ async function buildJmaQuakeEmbed(detail: JmaQuakeDetail): Promise<{ embeds: Emb
     return files.length ? { embeds: [embed], files } : { embeds: [embed] }
 }
 
+async function buildJmaTsunamiEmbed(detail: JmaTsunamiDetail): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
+    const items = detail.Body?.Tsunami?.Forecast?.Item ?? []
+    const earthquake = detail.Body?.Earthquake?.[0]
+    const points = collectTsunamiPoints(detail)
+    const disasterMap = await createDisasterMapAttachment(points, 'tsunami-map.png')
+    const affectedAreas = items
+        .slice(0, 12)
+        .map(item => {
+            const area = item.Area?.Name ?? '不明'
+            const kind = item.Category?.Kind?.Name ?? '津波情報'
+            const height = item.MaxHeight?.TsunamiHeight ? ` / 予想高さ ${item.MaxHeight.TsunamiHeight}m` : ''
+            return `${area}: ${kind}${height}`
+        })
+        .join('\n')
+
+    const embed = new EmbedBuilder()
+        .setTitle(detail.Head?.Title ?? '津波情報')
+        .setColor(0xff1f1f)
+        .setDescription(detail.Head?.Headline?.Text ?? detail.Body?.Text ?? '気象庁から津波に関する情報が発表されました。')
+        .addFields(
+            { name: '震源', value: earthquake?.Hypocenter?.Area?.Name ?? '不明', inline: true },
+            { name: '規模', value: formatMagnitude(earthquake?.Magnitude), inline: true },
+            { name: '発表時刻', value: detail.Head?.ReportDateTime ?? '不明', inline: true },
+        )
+        .setFooter({ text: 'Source: 気象庁' })
+        .setTimestamp(new Date())
+
+    if (affectedAreas) {
+        embed.addFields({ name: '対象地域', value: affectedAreas.slice(0, 1024), inline: false })
+    }
+
+    if (disasterMap) {
+        embed.setImage('attachment://tsunami-map.png')
+    }
+
+    return disasterMap ? { embeds: [embed], files: [disasterMap] } : { embeds: [embed] }
+}
+
+async function buildJmaFloodEmbed(
+    areas: ReturnType<typeof collectFloodAreas>,
+): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
+    const points = areas.map((area, index) => ({
+        label: String(index + 1),
+        latitude: area.point.latitude,
+        longitude: area.point.longitude,
+        color: floodColor(area.statuses),
+    }))
+    const disasterMap = await createDisasterMapAttachment(points, 'flood-map.png')
+    const affectedAreas = areas
+        .slice(0, 16)
+        .map(area => `${area.name}: ${area.statuses.join(' / ')}`)
+        .join('\n')
+
+    const embed = new EmbedBuilder()
+        .setTitle('洪水警報・注意報')
+        .setColor(areas.some(area => area.statuses.includes('洪水警報')) ? 0xff1f1f : 0xffff00)
+        .setDescription('気象庁から洪水に関する警報・注意報が発表されています。')
+        .addFields(
+            { name: '対象地域数', value: `${areas.length}`, inline: true },
+            { name: '取得時刻', value: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }), inline: true },
+        )
+        .setFooter({ text: 'Source: 気象庁' })
+        .setTimestamp(new Date())
+
+    if (affectedAreas) {
+        embed.addFields({ name: '対象地域', value: affectedAreas.slice(0, 1024), inline: false })
+    }
+
+    if (disasterMap) {
+        embed.setImage('attachment://flood-map.png')
+    }
+
+    return disasterMap ? { embeds: [embed], files: [disasterMap] } : { embeds: [embed] }
+}
+
 async function pollJmaQuake(client: Client) {
     const list = await fetchJmaList()
     const latestPath = list.find(item => isValidJmaJsonPath(item.json))?.json
@@ -556,6 +910,36 @@ async function pollJmaQuake(client: Client) {
     )
 
     saveLatestIds({ ...latestIds, quake: latestPath })
+}
+
+async function pollJmaTsunami(client: Client) {
+    const list = await fetchJmaTsunamiList()
+    const latestPath = list.find(item => isValidJmaJsonPath(item.json))?.json
+    if (!latestPath) return
+
+    const latestIds = loadLatestIds()
+    if (latestIds.tsunami === latestPath) return
+
+    const detail = await fetchJmaTsunamiDetail(latestPath)
+    await sendDisasterToConfiguredChannels(client, await buildJmaTsunamiEmbed(detail))
+
+    saveLatestIds({ ...latestIds, tsunami: latestPath })
+}
+
+async function pollJmaFlood(client: Client) {
+    const [warningMap, areaConst] = await Promise.all([
+        fetchJmaWarningMap(),
+        fetchJmaAreaConst(),
+    ])
+    const areas = collectFloodAreas(warningMap, areaConst)
+    if (!areas.length) return
+
+    const signature = floodSignature(areas, warningMap)
+    const latestIds = loadLatestIds()
+    if (latestIds.flood === signature) return
+
+    await sendDisasterToConfiguredChannels(client, await buildJmaFloodEmbed(areas))
+    saveLatestIds({ ...latestIds, flood: signature })
 }
 
 function shouldNotifyP2PMessage(message: unknown): message is P2PEewMessage | P2PQuakeMessage {
@@ -616,8 +1000,27 @@ function startP2PWebSocket(client: Client) {
     connect()
 }
 
+function startJmaDisasterAutoNotify(client: Client) {
+    pollJmaTsunami(client).catch((error: unknown) => {
+        console.error('気象庁津波情報の初回確認でエラーが発生しました:', error)
+    })
+    pollJmaFlood(client).catch((error: unknown) => {
+        console.error('気象庁洪水情報の初回確認でエラーが発生しました:', error)
+    })
+
+    setInterval(() => {
+        pollJmaTsunami(client).catch((error: unknown) => {
+            console.error('気象庁津波情報の自動確認でエラーが発生しました:', error)
+        })
+        pollJmaFlood(client).catch((error: unknown) => {
+            console.error('気象庁洪水情報の自動確認でエラーが発生しました:', error)
+        })
+    }, 60 * 1000)
+}
+
 export function startEqAutoNotify(client: Client) {
     startP2PWebSocket(client)
+    startJmaDisasterAutoNotify(client)
 
     pollJmaQuake(client).catch((error: unknown) => {
         console.error('気象庁地震情報の初回確認でエラーが発生しました:', error)
