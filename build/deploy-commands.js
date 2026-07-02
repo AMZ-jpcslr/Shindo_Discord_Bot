@@ -31,7 +31,14 @@ const commands = [
 ];
 const token = process.env.TOKEN;
 const clientId = process.env.CLIENT_ID;
-const guildId = process.env.GUILD_ID;
+const configuredGuildIds = [
+    process.env.GUILD_ID,
+    process.env.GUILD_IDS,
+]
+    .filter((value) => Boolean(value))
+    .flatMap(value => value.split(','))
+    .map(value => value.trim())
+    .filter(Boolean);
 if (!token) {
     throw new Error('TOKEN が設定されていません');
 }
@@ -40,19 +47,41 @@ if (!clientId) {
 }
 const rest = new discord_js_1.REST({ version: '10' }).setToken(token);
 const applicationId = clientId;
+function fetchBotGuilds() {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (configuredGuildIds.length) {
+            return configuredGuildIds.map(id => ({ id }));
+        }
+        return rest.get(discord_js_1.Routes.userGuilds());
+    });
+}
+function overwriteGlobalCommands() {
+    return __awaiter(this, void 0, void 0, function* () {
+        console.log('グローバルコマンドを現在の一覧で上書きしています...');
+        yield rest.put(discord_js_1.Routes.applicationCommands(applicationId), { body: commands });
+        console.log('グローバルコマンドの上書きが完了しました。反映にはDiscord側の時間がかかる場合があります。');
+    });
+}
+function overwriteGuildCommands(guilds) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        if (!guilds.length) {
+            console.warn('参加中のサーバーを取得できなかったため、ギルドコマンド登録をスキップしました。');
+            return;
+        }
+        console.log(`${guilds.length}件のサーバーへギルドコマンドを即時反映します...`);
+        for (const guild of guilds) {
+            yield rest.put(discord_js_1.Routes.applicationGuildCommands(applicationId, guild.id), { body: commands });
+            console.log(`ギルドコマンド更新完了: ${(_a = guild.name) !== null && _a !== void 0 ? _a : guild.id}`);
+        }
+    });
+}
 function main() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            if (guildId) {
-                const targetGuildId = guildId;
-                console.log(`スラッシュコマンドをギルド ${targetGuildId} に登録中...`);
-                yield rest.put(discord_js_1.Routes.applicationGuildCommands(applicationId, targetGuildId), { body: commands });
-                console.log('ギルドコマンド登録完了。通常はすぐ反映されます。');
-                return;
-            }
-            console.log('スラッシュコマンドをグローバル登録中...');
-            yield rest.put(discord_js_1.Routes.applicationCommands(applicationId), { body: commands });
-            console.log('グローバルコマンド登録完了。反映には時間がかかる場合があります。');
+            yield overwriteGlobalCommands();
+            yield overwriteGuildCommands(yield fetchBotGuilds());
+            console.log('スラッシュコマンドの一括更新が完了しました。');
         }
         catch (error) {
             console.error(error);
