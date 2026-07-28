@@ -335,17 +335,9 @@ function findJmaDetailForP2P(eventId, originTime, hypocenterName, magnitude) {
     });
 }
 function tsunamiColor(kindName) {
-    if (!kindName)
-        return '#2d6cdf';
-    if (kindName.includes('解除'))
-        return '#9aa0a6';
-    if (kindName.includes('大津波'))
-        return '#d900ff';
-    if (kindName.includes('津波警報'))
+    if (kindName === null || kindName === void 0 ? void 0 : kindName.includes('警報'))
         return '#ff1f1f';
-    if (kindName.includes('津波注意報'))
-        return '#ffff00';
-    return '#2d6cdf';
+    return '#ffff00';
 }
 function collectTsunamiPoints(detail) {
     var _a, _b, _c, _d;
@@ -367,15 +359,17 @@ function collectTsunamiPoints(detail) {
     });
 }
 function collectTsunamiLines(detail) {
-    var _a, _b, _c, _d;
-    const items = (_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Tsunami) === null || _b === void 0 ? void 0 : _b.Forecast) === null || _c === void 0 ? void 0 : _c.Item) !== null && _d !== void 0 ? _d : [];
-    return items.flatMap(item => {
-        var _a, _b, _c;
-        const areaName = (_a = item.Area) === null || _a === void 0 ? void 0 : _a.Name;
-        if (!areaName)
-            return [];
-        const line = (0, disaster_map_1.lineForTsunamiAreaName)(areaName, tsunamiColor((_c = (_b = item.Category) === null || _b === void 0 ? void 0 : _b.Kind) === null || _c === void 0 ? void 0 : _c.Name));
-        return line ? [line] : [];
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d;
+        const items = (_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Tsunami) === null || _b === void 0 ? void 0 : _b.Forecast) === null || _c === void 0 ? void 0 : _c.Item) !== null && _d !== void 0 ? _d : [];
+        const linesByArea = yield Promise.all(items.map(item => {
+            var _a, _b, _c;
+            const areaName = (_a = item.Area) === null || _a === void 0 ? void 0 : _a.Name;
+            if (!areaName)
+                return Promise.resolve([]);
+            return (0, disaster_map_1.linesForTsunamiAreaName)(areaName, tsunamiColor((_c = (_b = item.Category) === null || _b === void 0 ? void 0 : _b.Kind) === null || _c === void 0 ? void 0 : _c.Name));
+        }));
+        return linesByArea.flat();
     });
 }
 function flattenAreaEntries(areaConst) {
@@ -615,7 +609,7 @@ function buildJmaTsunamiEmbed(detail) {
         var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u;
         const items = (_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Tsunami) === null || _b === void 0 ? void 0 : _b.Forecast) === null || _c === void 0 ? void 0 : _c.Item) !== null && _d !== void 0 ? _d : [];
         const earthquake = (_f = (_e = detail.Body) === null || _e === void 0 ? void 0 : _e.Earthquake) === null || _f === void 0 ? void 0 : _f[0];
-        const lines = collectTsunamiLines(detail);
+        const lines = yield collectTsunamiLines(detail);
         const disasterMap = yield (0, disaster_map_1.createDisasterMapAttachment)([], 'tsunami-map.png', lines);
         const affectedAreas = items
             .slice(0, 12)

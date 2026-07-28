@@ -1,6 +1,11 @@
 import { AttachmentBuilder } from 'discord.js'
 import sharp, { type OverlayOptions } from 'sharp'
 
+const topojson = require('topojson-client') as {
+    feature: (topology: TopologyLike, object: unknown) => GeoFeatureCollectionLike
+}
+const landTopology = require('world-atlas/land-10m.json') as TopologyLike
+
 export type DisasterMapPoint = {
     label: string
     latitude: number
@@ -18,9 +23,29 @@ type Coordinate = {
     longitude: number
 }
 
+type Bounds = {
+    minLatitude: number
+    maxLatitude: number
+    minLongitude: number
+    maxLongitude: number
+}
+
+type TopologyLike = {
+    objects: Record<string, unknown>
+}
+
+type GeoFeatureCollectionLike = {
+    features?: {
+        geometry?: {
+            coordinates?: unknown
+        }
+    }[]
+}
+
 const TILE_SIZE = 256
 const MAP_WIDTH = 600
 const MAP_HEIGHT = 400
+let cachedWorldCoastlineRings: Coordinate[][] | null = null
 
 export const PREFECTURE_POINTS: Record<string, Coordinate> = {
     '北海道': { latitude: 43.0642, longitude: 141.3469 },
@@ -140,6 +165,93 @@ const TSUNAMI_COAST_LINES: Record<string, Coordinate[]> = {
     '秋田県': [{ latitude: 40.4, longitude: 140.0 }, { latitude: 39.7, longitude: 139.8 }, { latitude: 39.0, longitude: 139.8 }],
 }
 
+const DETAILED_TSUNAMI_COAST_LINES: Record<string, Coordinate[][]> = {
+    '有明・八代海': [
+        [
+            { latitude: 33.19, longitude: 130.39 },
+            { latitude: 33.12, longitude: 130.39 },
+            { latitude: 33.05, longitude: 130.36 },
+            { latitude: 32.95, longitude: 130.31 },
+            { latitude: 32.87, longitude: 130.28 },
+            { latitude: 32.78, longitude: 130.33 },
+            { latitude: 32.70, longitude: 130.45 },
+            { latitude: 32.62, longitude: 130.54 },
+            { latitude: 32.55, longitude: 130.57 },
+        ],
+        [
+            { latitude: 32.91, longitude: 130.19 },
+            { latitude: 32.84, longitude: 130.22 },
+            { latitude: 32.78, longitude: 130.28 },
+            { latitude: 32.72, longitude: 130.32 },
+            { latitude: 32.66, longitude: 130.33 },
+        ],
+        [
+            { latitude: 32.56, longitude: 130.56 },
+            { latitude: 32.48, longitude: 130.58 },
+            { latitude: 32.39, longitude: 130.55 },
+            { latitude: 32.30, longitude: 130.49 },
+            { latitude: 32.22, longitude: 130.43 },
+            { latitude: 32.16, longitude: 130.36 },
+        ],
+        [
+            { latitude: 32.43, longitude: 130.42 },
+            { latitude: 32.36, longitude: 130.39 },
+            { latitude: 32.29, longitude: 130.34 },
+            { latitude: 32.23, longitude: 130.29 },
+            { latitude: 32.18, longitude: 130.25 },
+        ],
+    ],
+    '長崎県西方': [
+        [
+            { latitude: 33.47, longitude: 129.98 },
+            { latitude: 33.39, longitude: 129.84 },
+            { latitude: 33.29, longitude: 129.73 },
+            { latitude: 33.18, longitude: 129.62 },
+            { latitude: 33.05, longitude: 129.59 },
+            { latitude: 32.93, longitude: 129.60 },
+            { latitude: 32.81, longitude: 129.66 },
+            { latitude: 32.70, longitude: 129.76 },
+            { latitude: 32.61, longitude: 129.86 },
+        ],
+        [
+            { latitude: 32.94, longitude: 129.07 },
+            { latitude: 32.83, longitude: 128.98 },
+            { latitude: 32.72, longitude: 128.83 },
+            { latitude: 32.62, longitude: 128.68 },
+        ],
+        [
+            { latitude: 34.28, longitude: 129.26 },
+            { latitude: 34.20, longitude: 129.21 },
+            { latitude: 34.11, longitude: 129.19 },
+            { latitude: 34.02, longitude: 129.15 },
+        ],
+    ],
+    '熊本県天草灘沿岸': [
+        [
+            { latitude: 32.59, longitude: 130.44 },
+            { latitude: 32.52, longitude: 130.36 },
+            { latitude: 32.45, longitude: 130.27 },
+            { latitude: 32.38, longitude: 130.20 },
+            { latitude: 32.29, longitude: 130.15 },
+            { latitude: 32.20, longitude: 130.10 },
+            { latitude: 32.11, longitude: 130.04 },
+        ],
+        [
+            { latitude: 32.52, longitude: 130.12 },
+            { latitude: 32.45, longitude: 130.08 },
+            { latitude: 32.37, longitude: 130.03 },
+            { latitude: 32.29, longitude: 129.98 },
+            { latitude: 32.20, longitude: 129.94 },
+        ],
+        [
+            { latitude: 32.34, longitude: 130.34 },
+            { latitude: 32.28, longitude: 130.29 },
+            { latitude: 32.22, longitude: 130.24 },
+            { latitude: 32.16, longitude: 130.18 },
+        ],
+    ],
+}
+
 function project(coordinate: Coordinate, zoom: number): { x: number, y: number } {
     const sinLat = Math.sin(coordinate.latitude * Math.PI / 180)
     const worldSize = TILE_SIZE * 2 ** zoom
@@ -148,6 +260,165 @@ function project(coordinate: Coordinate, zoom: number): { x: number, y: number }
         x: (coordinate.longitude + 180) / 360 * worldSize,
         y: (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * worldSize,
     }
+}
+
+function boundsFromCoordinates(coordinates: Coordinate[], padding = 0.25): Bounds | null {
+    if (!coordinates.length) return null
+
+    return {
+        minLatitude: Math.min(...coordinates.map(coordinate => coordinate.latitude)) - padding,
+        maxLatitude: Math.max(...coordinates.map(coordinate => coordinate.latitude)) + padding,
+        minLongitude: Math.min(...coordinates.map(coordinate => coordinate.longitude)) - padding,
+        maxLongitude: Math.max(...coordinates.map(coordinate => coordinate.longitude)) + padding,
+    }
+}
+
+function coordinateInBounds(coordinate: Coordinate, bounds: Bounds): boolean {
+    return (
+        coordinate.latitude >= bounds.minLatitude &&
+        coordinate.latitude <= bounds.maxLatitude &&
+        coordinate.longitude >= bounds.minLongitude &&
+        coordinate.longitude <= bounds.maxLongitude
+    )
+}
+
+function segmentDistance(a: Coordinate, b: Coordinate): number {
+    const latDelta = a.latitude - b.latitude
+    const lonDelta = a.longitude - b.longitude
+    return Math.sqrt(latDelta * latDelta + lonDelta * lonDelta)
+}
+
+function totalLineDistance(coordinates: Coordinate[]): number {
+    return coordinates.reduce((sum, coordinate, index) => {
+        if (index === 0) return 0
+        return sum + segmentDistance(coordinates[index - 1], coordinate)
+    }, 0)
+}
+
+function coastlineSegmentsFromLine(coordinates: Coordinate[], areaBounds: Bounds): Coordinate[][] {
+    const segments: Coordinate[][] = []
+    let current: Coordinate[] = []
+
+    for (let index = 1; index < coordinates.length; index += 1) {
+        const previous = coordinates[index - 1]
+        const coordinate = coordinates[index]
+        const middle = {
+            latitude: (previous.latitude + coordinate.latitude) / 2,
+            longitude: (previous.longitude + coordinate.longitude) / 2,
+        }
+        const keep = (
+            coordinateInBounds(middle, areaBounds)
+        )
+
+        if (keep) {
+            if (!current.length) current.push(previous)
+            current.push(coordinate)
+            continue
+        }
+
+        if (current.length >= 2 && totalLineDistance(current) > 0.01) {
+            segments.push(current)
+        }
+        current = []
+    }
+
+    if (current.length >= 2 && totalLineDistance(current) > 0.01) {
+        segments.push(current)
+    }
+
+    return segments
+}
+
+function padBounds(bounds: Bounds, padding: number): Bounds {
+    return {
+        minLatitude: bounds.minLatitude - padding,
+        maxLatitude: bounds.maxLatitude + padding,
+        minLongitude: bounds.minLongitude - padding,
+        maxLongitude: bounds.maxLongitude + padding,
+    }
+}
+
+function boundsForTsunamiAreaName(name: string): Bounds | null {
+    const detailed = Object.entries(DETAILED_TSUNAMI_COAST_LINES)
+        .find(([key]) => name.includes(key) || key.includes(name))
+    if (detailed) {
+        return boundsFromCoordinates(detailed[1].flat(), 0.18)
+    }
+
+    const simple = Object.entries(TSUNAMI_COAST_LINES)
+        .find(([key]) => name.includes(key) || key.includes(name))
+    if (simple) {
+        return boundsFromCoordinates(simple[1], 0.28)
+    }
+
+    const point = pointForAreaName(name)
+    if (!point) return null
+
+    return {
+        minLatitude: point.latitude - 0.7,
+        maxLatitude: point.latitude + 0.7,
+        minLongitude: point.longitude - 0.9,
+        maxLongitude: point.longitude + 0.9,
+    }
+}
+
+function seedLinesForTsunamiAreaName(name: string): Coordinate[][] {
+    const detailed = Object.entries(DETAILED_TSUNAMI_COAST_LINES)
+        .find(([key]) => name.includes(key) || key.includes(name))
+    if (detailed) return detailed[1]
+
+    const simple = Object.entries(TSUNAMI_COAST_LINES)
+        .find(([key]) => name.includes(key) || key.includes(name))
+    if (simple) return [simple[1]]
+
+    const point = pointForAreaName(name)
+    if (!point) return []
+
+    return [[
+        { latitude: point.latitude - 0.2, longitude: point.longitude - 0.25 },
+        { latitude: point.latitude + 0.2, longitude: point.longitude + 0.25 },
+    ]]
+}
+
+function normalizeLineCoordinates(coordinates: unknown): Coordinate[][] {
+    if (!Array.isArray(coordinates)) return []
+
+    const isPosition = (value: unknown): value is [number, number] =>
+        Array.isArray(value) &&
+        typeof value[0] === 'number' &&
+        typeof value[1] === 'number'
+
+    if (coordinates.every(isPosition)) {
+        return [coordinates.map(([longitude, latitude]) => ({ latitude, longitude }))]
+    }
+
+    return coordinates.flatMap(child => normalizeLineCoordinates(child))
+}
+
+function worldCoastlineRings(): Coordinate[][] {
+    if (cachedWorldCoastlineRings) return cachedWorldCoastlineRings
+
+    const land = topojson.feature(landTopology, landTopology.objects.land)
+    cachedWorldCoastlineRings = (land.features ?? [])
+        .flatMap(feature => normalizeLineCoordinates(feature.geometry?.coordinates))
+
+    return cachedWorldCoastlineRings
+}
+
+async function fetchGsiCoastlineLines(bounds: Bounds, color: string): Promise<DisasterMapLine[]> {
+    const paddedBounds = padBounds(bounds, 0.08)
+    const lines: DisasterMapLine[] = []
+
+    for (const coordinates of worldCoastlineRings()) {
+        for (const segment of coastlineSegmentsFromLine(coordinates, paddedBounds)) {
+            lines.push({
+                coordinates: segment,
+                color,
+            })
+        }
+    }
+
+    return lines
 }
 
 function collectCoordinates(points: DisasterMapPoint[], lines: DisasterMapLine[]): Coordinate[] {
@@ -205,19 +476,38 @@ function buildOverlaySvg(points: DisasterMapPoint[], lines: DisasterMapLine[], c
     const left = centerPoint.x - MAP_WIDTH / 2
     const top = centerPoint.y - MAP_HEIGHT / 2
 
-    const lineSvg = lines.map(line => {
-        const path = line.coordinates.map((coordinate, index) => {
-            const projected = project(coordinate, zoom)
-            const x = projected.x - left
-            const y = projected.y - top
+    const linePath = (coordinates: Coordinate[]): string => {
+        return coordinates.map((coordinate, index) => {
+            const point = project(coordinate, zoom)
+            const x = point.x - left
+            const y = point.y - top
             return `${index === 0 ? 'M' : 'L'} ${x} ${y}`
         }).join(' ')
+    }
 
-        return `
-            <path d="${path}" fill="none" stroke="#101418" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
-            <path d="${path}" fill="none" stroke="${line.color}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
-        `
-    }).join('')
+    const linePriority = (color: string): number => {
+        switch (color) {
+            case '#ffff00': return 1
+            case '#ff1f1f': return 2
+            default: return 1
+        }
+    }
+
+    const linePaths = [...lines]
+        .sort((a, b) => linePriority(a.color) - linePriority(b.color))
+        .map(line => ({
+            path: linePath(line.coordinates),
+            color: line.color,
+        }))
+        .filter(line => line.path)
+
+    const lineUnderlaySvg = linePaths.map(line => `
+        <path d="${line.path}" fill="none" stroke="#101418" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity="0.92"/>
+    `).join('')
+
+    const lineOverlaySvg = linePaths.map(line => `
+        <path d="${line.path}" fill="none" stroke="${line.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    `).join('')
 
     const pointSvg = points.map(point => {
         const projected = project(point, zoom)
@@ -243,7 +533,8 @@ function buildOverlaySvg(points: DisasterMapPoint[], lines: DisasterMapLine[], c
     return Buffer.from(`
         <svg width="${MAP_WIDTH}" height="${MAP_HEIGHT}" viewBox="0 0 ${MAP_WIDTH} ${MAP_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
             <rect width="100%" height="100%" fill="rgba(16, 22, 18, 0.14)"/>
-            ${lineSvg}
+            ${lineUnderlaySvg}
+            ${lineOverlaySvg}
             ${pointSvg}
         </svg>
     `)
@@ -259,27 +550,11 @@ export function pointForAreaName(name: string): Coordinate | null {
     return null
 }
 
-export function lineForTsunamiAreaName(name: string, color: string): DisasterMapLine | null {
-    const matched = Object.entries(TSUNAMI_COAST_LINES)
-        .find(([key]) => name.includes(key) || key.includes(name))
+export async function linesForTsunamiAreaName(name: string, color: string): Promise<DisasterMapLine[]> {
+    const bounds = boundsForTsunamiAreaName(name)
+    if (!bounds) return []
 
-    if (matched) {
-        return {
-            coordinates: matched[1],
-            color,
-        }
-    }
-
-    const point = pointForAreaName(name)
-    if (!point) return null
-
-    return {
-        coordinates: [
-            { latitude: point.latitude - 0.2, longitude: point.longitude - 0.25 },
-            { latitude: point.latitude + 0.2, longitude: point.longitude + 0.25 },
-        ],
-        color,
-    }
+    return fetchGsiCoastlineLines(bounds, color)
 }
 
 export async function createDisasterMapAttachment(

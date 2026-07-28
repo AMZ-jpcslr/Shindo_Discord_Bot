@@ -7,7 +7,7 @@ import {
 import fs from 'fs'
 import path from 'path'
 import WebSocket from 'ws'
-import { createDisasterMapAttachment, lineForTsunamiAreaName, pointForAreaName, type DisasterMapLine, type DisasterMapPoint } from './disaster_map'
+import { createDisasterMapAttachment, linesForTsunamiAreaName, pointForAreaName, type DisasterMapLine, type DisasterMapPoint } from './disaster_map'
 import { createIntensityMapAttachment } from './intensity_map'
 
 const DATA_DIR = path.join(__dirname, '../../data')
@@ -544,12 +544,8 @@ async function findJmaDetailForP2P(
 }
 
 function tsunamiColor(kindName?: string): string {
-    if (!kindName) return '#2d6cdf'
-    if (kindName.includes('解除')) return '#9aa0a6'
-    if (kindName.includes('大津波')) return '#d900ff'
-    if (kindName.includes('津波警報')) return '#ff1f1f'
-    if (kindName.includes('津波注意報')) return '#ffff00'
-    return '#2d6cdf'
+    if (kindName?.includes('警報')) return '#ff1f1f'
+    return '#ffff00'
 }
 
 function collectTsunamiPoints(detail: JmaTsunamiDetail): DisasterMapPoint[] {
@@ -571,16 +567,16 @@ function collectTsunamiPoints(detail: JmaTsunamiDetail): DisasterMapPoint[] {
     })
 }
 
-function collectTsunamiLines(detail: JmaTsunamiDetail): DisasterMapLine[] {
+async function collectTsunamiLines(detail: JmaTsunamiDetail): Promise<DisasterMapLine[]> {
     const items = detail.Body?.Tsunami?.Forecast?.Item ?? []
-
-    return items.flatMap(item => {
+    const linesByArea = await Promise.all(items.map(item => {
         const areaName = item.Area?.Name
-        if (!areaName) return []
+        if (!areaName) return Promise.resolve([])
 
-        const line = lineForTsunamiAreaName(areaName, tsunamiColor(item.Category?.Kind?.Name))
-        return line ? [line] : []
-    })
+        return linesForTsunamiAreaName(areaName, tsunamiColor(item.Category?.Kind?.Name))
+    }))
+
+    return linesByArea.flat()
 }
 
 function flattenAreaEntries(areaConst: JmaAreaConst): Record<string, JmaAreaEntry> {
@@ -893,7 +889,7 @@ async function buildJmaQuakeEmbed(detail: JmaQuakeDetail): Promise<DiscordPayloa
 async function buildJmaTsunamiEmbed(detail: JmaTsunamiDetail): Promise<DiscordPayload> {
     const items = detail.Body?.Tsunami?.Forecast?.Item ?? []
     const earthquake = detail.Body?.Earthquake?.[0]
-    const lines = collectTsunamiLines(detail)
+    const lines = await collectTsunamiLines(detail)
     const disasterMap = await createDisasterMapAttachment([], 'tsunami-map.png', lines)
     const affectedAreas = items
         .slice(0, 12)
