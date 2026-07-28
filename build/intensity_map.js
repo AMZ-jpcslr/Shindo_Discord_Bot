@@ -155,28 +155,22 @@ function zoomFromMagnitude(magnitude) {
     return 9;
 }
 function zoomFromSpread(epicenter, points) {
-    const maxDelta = points.reduce((currentMax, point) => {
-        const latDelta = Math.abs(point.latitude - epicenter.latitude);
-        const lonDelta = Math.abs(point.longitude - epicenter.longitude);
-        return Math.max(currentMax, latDelta, lonDelta);
-    }, 0);
-    if (maxDelta > 8)
-        return 4;
-    if (maxDelta > 4)
-        return 5;
-    if (maxDelta > 2)
-        return 6;
-    if (maxDelta > 1)
-        return 7;
-    if (maxDelta > 0.5)
-        return 8;
-    return 9;
+    const margin = 26;
+    for (let zoom = 10; zoom >= 4; zoom -= 1) {
+        const center = project(epicenter, zoom);
+        const fits = points.every(point => {
+            const projected = project(point, zoom);
+            return (Math.abs(projected.x - center.x) <= MAP_WIDTH / 2 - margin &&
+                Math.abs(projected.y - center.y) <= MAP_HEIGHT / 2 - margin);
+        });
+        if (fits)
+            return zoom;
+    }
+    return 4;
 }
 function calculateZoom(detail, epicenter, points) {
-    var _a, _b;
-    const magnitudeZoom = zoomFromMagnitude((_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake) === null || _b === void 0 ? void 0 : _b.Magnitude);
     const spreadZoom = zoomFromSpread(epicenter, points);
-    return Math.max(4, Math.min(10, Math.min(magnitudeZoom, spreadZoom)));
+    return Math.max(4, Math.min(10, spreadZoom));
 }
 function collectStations(detail) {
     var _a, _b, _c, _d, _e;
@@ -187,7 +181,7 @@ function collectStations(detail) {
     }).map(station => (Object.assign(Object.assign({}, station), { coordinate: {
             latitude: station.latlon.lat,
             longitude: station.latlon.lon,
-        } }))).sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int)).slice(0, 120)) !== null && _e !== void 0 ? _e : [];
+        } }))).sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int))) !== null && _e !== void 0 ? _e : [];
 }
 function fetchTile(zoom, x, y) {
     return __awaiter(this, void 0, void 0, function* () {

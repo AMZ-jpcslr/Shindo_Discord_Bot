@@ -8,6 +8,11 @@ export type DisasterMapPoint = {
     color: string
 }
 
+export type DisasterMapLine = {
+    coordinates: Coordinate[]
+    color: string
+}
+
 type Coordinate = {
     latitude: number
     longitude: number
@@ -71,6 +76,70 @@ export const PREFECTURE_POINTS: Record<string, Coordinate> = {
     'トカラ列島': { latitude: 29.6, longitude: 129.7 },
 }
 
+const TSUNAMI_COAST_LINES: Record<string, Coordinate[]> = {
+    '北海道太平洋沿岸東部': [{ latitude: 43.4, longitude: 145.6 }, { latitude: 42.9, longitude: 145.0 }, { latitude: 42.4, longitude: 144.3 }],
+    '北海道太平洋沿岸中部': [{ latitude: 42.4, longitude: 144.3 }, { latitude: 42.2, longitude: 143.2 }, { latitude: 42.0, longitude: 142.3 }],
+    '北海道太平洋沿岸西部': [{ latitude: 42.0, longitude: 142.3 }, { latitude: 42.3, longitude: 141.0 }, { latitude: 41.8, longitude: 140.7 }],
+    '北海道日本海沿岸北部': [{ latitude: 45.4, longitude: 141.7 }, { latitude: 44.6, longitude: 141.8 }, { latitude: 43.9, longitude: 141.6 }],
+    '北海道日本海沿岸南部': [{ latitude: 43.9, longitude: 141.6 }, { latitude: 43.1, longitude: 140.8 }, { latitude: 42.1, longitude: 140.2 }],
+    'オホーツク海沿岸': [{ latitude: 45.4, longitude: 141.7 }, { latitude: 44.4, longitude: 143.3 }, { latitude: 43.9, longitude: 144.8 }],
+    '青森県日本海沿岸': [{ latitude: 41.2, longitude: 140.1 }, { latitude: 40.8, longitude: 140.0 }, { latitude: 40.5, longitude: 140.0 }],
+    '青森県太平洋沿岸': [{ latitude: 41.5, longitude: 141.4 }, { latitude: 40.9, longitude: 141.4 }, { latitude: 40.5, longitude: 141.7 }],
+    '陸奥湾': [{ latitude: 41.0, longitude: 140.7 }, { latitude: 41.0, longitude: 141.1 }],
+    '岩手県': [{ latitude: 40.3, longitude: 141.8 }, { latitude: 39.6, longitude: 142.0 }, { latitude: 39.0, longitude: 141.9 }],
+    '宮城県': [{ latitude: 38.9, longitude: 141.7 }, { latitude: 38.4, longitude: 141.5 }, { latitude: 37.9, longitude: 141.0 }],
+    '福島県': [{ latitude: 37.9, longitude: 141.0 }, { latitude: 37.4, longitude: 141.0 }, { latitude: 36.9, longitude: 140.9 }],
+    '茨城県': [{ latitude: 36.9, longitude: 140.9 }, { latitude: 36.3, longitude: 140.7 }, { latitude: 35.8, longitude: 140.8 }],
+    '千葉県九十九里・外房': [{ latitude: 35.8, longitude: 140.8 }, { latitude: 35.3, longitude: 140.4 }, { latitude: 34.9, longitude: 140.0 }],
+    '千葉県内房': [{ latitude: 35.3, longitude: 139.8 }, { latitude: 35.0, longitude: 139.8 }, { latitude: 34.9, longitude: 139.9 }],
+    '東京湾内湾': [{ latitude: 35.6, longitude: 139.8 }, { latitude: 35.4, longitude: 139.9 }, { latitude: 35.2, longitude: 139.8 }],
+    '伊豆諸島': [{ latitude: 34.7, longitude: 139.4 }, { latitude: 34.0, longitude: 139.5 }, { latitude: 33.1, longitude: 139.8 }],
+    '小笠原諸島': [{ latitude: 27.7, longitude: 142.1 }, { latitude: 27.1, longitude: 142.2 }, { latitude: 26.6, longitude: 142.2 }],
+    '相模湾・三浦半島': [{ latitude: 35.3, longitude: 139.3 }, { latitude: 35.2, longitude: 139.6 }, { latitude: 35.1, longitude: 139.7 }],
+    '静岡県': [{ latitude: 35.0, longitude: 138.9 }, { latitude: 34.7, longitude: 138.2 }, { latitude: 34.6, longitude: 137.6 }],
+    '愛知県外海': [{ latitude: 34.6, longitude: 137.3 }, { latitude: 34.6, longitude: 137.0 }, { latitude: 34.7, longitude: 136.9 }],
+    '伊勢・三河湾': [{ latitude: 34.8, longitude: 136.8 }, { latitude: 34.6, longitude: 136.7 }, { latitude: 34.5, longitude: 136.9 }],
+    '三重県南部': [{ latitude: 34.4, longitude: 136.9 }, { latitude: 34.0, longitude: 136.3 }, { latitude: 33.8, longitude: 136.0 }],
+    '和歌山県': [{ latitude: 33.8, longitude: 136.0 }, { latitude: 33.7, longitude: 135.4 }, { latitude: 34.1, longitude: 135.0 }],
+    '大阪府': [{ latitude: 34.7, longitude: 135.2 }, { latitude: 34.5, longitude: 135.2 }],
+    '兵庫県瀬戸内海沿岸': [{ latitude: 34.7, longitude: 135.0 }, { latitude: 34.6, longitude: 134.6 }, { latitude: 34.5, longitude: 134.2 }],
+    '淡路島南部': [{ latitude: 34.4, longitude: 134.8 }, { latitude: 34.2, longitude: 134.7 }],
+    '岡山県': [{ latitude: 34.5, longitude: 134.2 }, { latitude: 34.4, longitude: 133.7 }, { latitude: 34.4, longitude: 133.3 }],
+    '香川県': [{ latitude: 34.4, longitude: 134.4 }, { latitude: 34.3, longitude: 134.0 }, { latitude: 34.2, longitude: 133.6 }],
+    '徳島県': [{ latitude: 34.2, longitude: 134.6 }, { latitude: 33.9, longitude: 134.6 }, { latitude: 33.7, longitude: 134.3 }],
+    '愛媛県瀬戸内海沿岸': [{ latitude: 34.1, longitude: 133.0 }, { latitude: 33.9, longitude: 132.5 }, { latitude: 33.9, longitude: 132.0 }],
+    '愛媛県宇和海沿岸': [{ latitude: 33.5, longitude: 132.5 }, { latitude: 33.2, longitude: 132.4 }, { latitude: 32.9, longitude: 132.5 }],
+    '高知県': [{ latitude: 33.5, longitude: 133.5 }, { latitude: 33.2, longitude: 133.0 }, { latitude: 32.8, longitude: 132.8 }],
+    '福岡県日本海沿岸': [{ latitude: 33.9, longitude: 130.9 }, { latitude: 33.7, longitude: 130.4 }, { latitude: 33.9, longitude: 130.0 }],
+    '有明・八代海': [{ latitude: 33.0, longitude: 130.25 }, { latitude: 32.6, longitude: 130.32 }, { latitude: 32.2, longitude: 130.25 }],
+    '佐賀県北部': [{ latitude: 33.6, longitude: 130.4 }, { latitude: 33.5, longitude: 129.9 }],
+    '長崎県西方': [{ latitude: 33.3, longitude: 129.6 }, { latitude: 32.8, longitude: 129.5 }, { latitude: 32.6, longitude: 129.7 }],
+    '熊本県天草灘沿岸': [{ latitude: 32.5, longitude: 130.1 }, { latitude: 32.2, longitude: 130.0 }, { latitude: 31.9, longitude: 130.1 }],
+    '大分県瀬戸内海沿岸': [{ latitude: 33.7, longitude: 131.7 }, { latitude: 33.4, longitude: 131.7 }, { latitude: 33.3, longitude: 131.9 }],
+    '大分県豊後水道沿岸': [{ latitude: 33.1, longitude: 131.9 }, { latitude: 32.8, longitude: 131.9 }],
+    '宮崎県': [{ latitude: 32.7, longitude: 131.9 }, { latitude: 32.0, longitude: 131.5 }, { latitude: 31.5, longitude: 131.4 }],
+    '鹿児島県東部': [{ latitude: 31.5, longitude: 131.1 }, { latitude: 31.2, longitude: 130.8 }, { latitude: 30.9, longitude: 130.8 }],
+    '鹿児島県西部': [{ latitude: 31.7, longitude: 130.3 }, { latitude: 31.4, longitude: 130.2 }, { latitude: 31.0, longitude: 130.2 }],
+    '種子島・屋久島地方': [{ latitude: 30.8, longitude: 131.0 }, { latitude: 30.4, longitude: 130.6 }, { latitude: 30.2, longitude: 130.5 }],
+    '奄美群島・トカラ列島': [{ latitude: 29.8, longitude: 129.8 }, { latitude: 28.5, longitude: 129.4 }, { latitude: 27.7, longitude: 128.9 }],
+    '沖縄本島地方': [{ latitude: 26.9, longitude: 128.2 }, { latitude: 26.2, longitude: 127.7 }, { latitude: 25.8, longitude: 127.2 }],
+    '大東島地方': [{ latitude: 25.9, longitude: 131.2 }, { latitude: 25.8, longitude: 131.3 }],
+    '宮古島・八重山地方': [{ latitude: 24.9, longitude: 125.3 }, { latitude: 24.4, longitude: 124.2 }, { latitude: 24.3, longitude: 123.8 }],
+    '新潟県': [{ latitude: 38.4, longitude: 139.5 }, { latitude: 37.8, longitude: 138.9 }, { latitude: 37.0, longitude: 138.2 }],
+    '富山県': [{ latitude: 36.9, longitude: 137.4 }, { latitude: 36.8, longitude: 137.0 }],
+    '石川県': [{ latitude: 37.5, longitude: 137.3 }, { latitude: 36.9, longitude: 136.8 }, { latitude: 36.4, longitude: 136.4 }],
+    '福井県': [{ latitude: 36.3, longitude: 136.1 }, { latitude: 35.9, longitude: 135.9 }, { latitude: 35.6, longitude: 135.8 }],
+    '京都府': [{ latitude: 35.8, longitude: 135.1 }, { latitude: 35.6, longitude: 135.2 }],
+    '兵庫県日本海沿岸': [{ latitude: 35.7, longitude: 134.8 }, { latitude: 35.6, longitude: 134.4 }],
+    '鳥取県': [{ latitude: 35.6, longitude: 134.4 }, { latitude: 35.5, longitude: 133.8 }, { latitude: 35.4, longitude: 133.3 }],
+    '島根県': [{ latitude: 35.5, longitude: 133.2 }, { latitude: 35.3, longitude: 132.4 }, { latitude: 35.1, longitude: 131.8 }],
+    '山口県日本海沿岸': [{ latitude: 34.7, longitude: 131.6 }, { latitude: 34.4, longitude: 131.1 }, { latitude: 34.3, longitude: 130.9 }],
+    '山口県瀬戸内海沿岸': [{ latitude: 34.1, longitude: 132.0 }, { latitude: 34.0, longitude: 131.4 }, { latitude: 33.9, longitude: 131.0 }],
+    '福岡県瀬戸内海沿岸': [{ latitude: 33.9, longitude: 131.0 }, { latitude: 33.9, longitude: 130.8 }],
+    '山形県': [{ latitude: 39.1, longitude: 139.7 }, { latitude: 38.6, longitude: 139.5 }],
+    '秋田県': [{ latitude: 40.4, longitude: 140.0 }, { latitude: 39.7, longitude: 139.8 }, { latitude: 39.0, longitude: 139.8 }],
+}
+
 function project(coordinate: Coordinate, zoom: number): { x: number, y: number } {
     const sinLat = Math.sin(coordinate.latitude * Math.PI / 180)
     const worldSize = TILE_SIZE * 2 ** zoom
@@ -81,20 +150,29 @@ function project(coordinate: Coordinate, zoom: number): { x: number, y: number }
     }
 }
 
-function centerOf(points: DisasterMapPoint[]): Coordinate {
-    if (!points.length) return { latitude: 36.2, longitude: 138.2 }
+function collectCoordinates(points: DisasterMapPoint[], lines: DisasterMapLine[]): Coordinate[] {
+    return [
+        ...points,
+        ...lines.flatMap(line => line.coordinates),
+    ]
+}
+
+function centerOf(points: DisasterMapPoint[], lines: DisasterMapLine[] = []): Coordinate {
+    const coordinates = collectCoordinates(points, lines)
+    if (!coordinates.length) return { latitude: 36.2, longitude: 138.2 }
 
     return {
-        latitude: points.reduce((sum, point) => sum + point.latitude, 0) / points.length,
-        longitude: points.reduce((sum, point) => sum + point.longitude, 0) / points.length,
+        latitude: coordinates.reduce((sum, point) => sum + point.latitude, 0) / coordinates.length,
+        longitude: coordinates.reduce((sum, point) => sum + point.longitude, 0) / coordinates.length,
     }
 }
 
-function calculateZoom(points: DisasterMapPoint[]): number {
-    if (points.length <= 1) return 7
+function calculateZoom(points: DisasterMapPoint[], lines: DisasterMapLine[] = []): number {
+    const coordinates = collectCoordinates(points, lines)
+    if (coordinates.length <= 1) return 7
 
-    const center = centerOf(points)
-    const maxDelta = points.reduce((currentMax, point) => {
+    const center = centerOf(points, lines)
+    const maxDelta = coordinates.reduce((currentMax, point) => {
         const latDelta = Math.abs(point.latitude - center.latitude)
         const lonDelta = Math.abs(point.longitude - center.longitude)
         return Math.max(currentMax, latDelta, lonDelta)
@@ -122,10 +200,24 @@ async function fetchTile(zoom: number, x: number, y: number): Promise<Buffer | n
         .toBuffer()
 }
 
-function buildOverlaySvg(points: DisasterMapPoint[], center: Coordinate, zoom: number): Buffer {
+function buildOverlaySvg(points: DisasterMapPoint[], lines: DisasterMapLine[], center: Coordinate, zoom: number): Buffer {
     const centerPoint = project(center, zoom)
     const left = centerPoint.x - MAP_WIDTH / 2
     const top = centerPoint.y - MAP_HEIGHT / 2
+
+    const lineSvg = lines.map(line => {
+        const path = line.coordinates.map((coordinate, index) => {
+            const projected = project(coordinate, zoom)
+            const x = projected.x - left
+            const y = projected.y - top
+            return `${index === 0 ? 'M' : 'L'} ${x} ${y}`
+        }).join(' ')
+
+        return `
+            <path d="${path}" fill="none" stroke="#101418" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+            <path d="${path}" fill="none" stroke="${line.color}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+        `
+    }).join('')
 
     const pointSvg = points.map(point => {
         const projected = project(point, zoom)
@@ -151,6 +243,7 @@ function buildOverlaySvg(points: DisasterMapPoint[], center: Coordinate, zoom: n
     return Buffer.from(`
         <svg width="${MAP_WIDTH}" height="${MAP_HEIGHT}" viewBox="0 0 ${MAP_WIDTH} ${MAP_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
             <rect width="100%" height="100%" fill="rgba(16, 22, 18, 0.14)"/>
+            ${lineSvg}
             ${pointSvg}
         </svg>
     `)
@@ -166,14 +259,38 @@ export function pointForAreaName(name: string): Coordinate | null {
     return null
 }
 
+export function lineForTsunamiAreaName(name: string, color: string): DisasterMapLine | null {
+    const matched = Object.entries(TSUNAMI_COAST_LINES)
+        .find(([key]) => name.includes(key) || key.includes(name))
+
+    if (matched) {
+        return {
+            coordinates: matched[1],
+            color,
+        }
+    }
+
+    const point = pointForAreaName(name)
+    if (!point) return null
+
+    return {
+        coordinates: [
+            { latitude: point.latitude - 0.2, longitude: point.longitude - 0.25 },
+            { latitude: point.latitude + 0.2, longitude: point.longitude + 0.25 },
+        ],
+        color,
+    }
+}
+
 export async function createDisasterMapAttachment(
     points: DisasterMapPoint[],
     name = 'disaster-map.png',
+    lines: DisasterMapLine[] = [],
 ): Promise<AttachmentBuilder | null> {
-    if (!points.length) return null
+    if (!points.length && !lines.length) return null
 
-    const zoom = calculateZoom(points)
-    const center = centerOf(points)
+    const zoom = calculateZoom(points, lines)
+    const center = centerOf(points, lines)
     const projectedCenter = project(center, zoom)
     const left = projectedCenter.x - MAP_WIDTH / 2
     const top = projectedCenter.y - MAP_HEIGHT / 2
@@ -197,7 +314,7 @@ export async function createDisasterMapAttachment(
     }
 
     composites.push({
-        input: buildOverlaySvg(points, center, zoom),
+        input: buildOverlaySvg(points, lines, center, zoom),
         left: 0,
         top: 0,
     })

@@ -180,6 +180,47 @@ function formatDepth(depth) {
         return depth === 0 ? 'ごく浅い' : `${depth}km`;
     return depth;
 }
+function depthFromJmaCoordinate(coordinate) {
+    if (!coordinate)
+        return null;
+    const match = coordinate.match(/[+-]\d+(?:\.\d+)?[+-]\d+(?:\.\d+)?([+-]\d+)\/?/);
+    if (!match)
+        return null;
+    const meters = Math.abs(Number(match[1]));
+    if (!Number.isFinite(meters))
+        return null;
+    return Math.round(meters / 1000);
+}
+function formatJmaDepth(depth, coordinate) {
+    const coordinateDepth = depthFromJmaCoordinate(coordinate);
+    if (coordinateDepth !== null)
+        return coordinateDepth === 0 ? 'ごく浅い' : `${coordinateDepth}km`;
+    return formatDepth(depth);
+}
+function formatJstTime(time) {
+    if (!time)
+        return '不明';
+    const normalized = time.includes('T')
+        ? time
+        : time.replace(/\//g, '-').replace(' ', 'T');
+    const dateSource = /(?:Z|[+-]\d{2}:?\d{2})$/.test(normalized)
+        ? normalized
+        : `${normalized}+09:00`;
+    const date = new Date(dateSource);
+    if (Number.isNaN(date.getTime()))
+        return time;
+    const parts = new Intl.DateTimeFormat('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    }).formatToParts(date);
+    const value = (type) => { var _a, _b; return (_b = (_a = parts.find(part => part.type === type)) === null || _a === void 0 ? void 0 : _a.value) !== null && _b !== void 0 ? _b : ''; };
+    return `${value('year')}年${value('month')}月${value('day')}日 ${value('hour')}:${value('minute')}`;
+}
 function formatMagnitude(magnitude) {
     if (magnitude === undefined || magnitude === null || magnitude === '')
         return '不明';
@@ -296,6 +337,8 @@ function findJmaDetailForP2P(eventId, originTime, hypocenterName, magnitude) {
 function tsunamiColor(kindName) {
     if (!kindName)
         return '#2d6cdf';
+    if (kindName.includes('解除'))
+        return '#9aa0a6';
     if (kindName.includes('大津波'))
         return '#d900ff';
     if (kindName.includes('津波警報'))
@@ -321,6 +364,18 @@ function collectTsunamiPoints(detail) {
                 longitude: coordinate.longitude,
                 color: tsunamiColor((_c = (_b = item.Category) === null || _b === void 0 ? void 0 : _b.Kind) === null || _c === void 0 ? void 0 : _c.Name),
             }];
+    });
+}
+function collectTsunamiLines(detail) {
+    var _a, _b, _c, _d;
+    const items = (_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Tsunami) === null || _b === void 0 ? void 0 : _b.Forecast) === null || _c === void 0 ? void 0 : _c.Item) !== null && _d !== void 0 ? _d : [];
+    return items.flatMap(item => {
+        var _a, _b, _c;
+        const areaName = (_a = item.Area) === null || _a === void 0 ? void 0 : _a.Name;
+        if (!areaName)
+            return [];
+        const line = (0, disaster_map_1.lineForTsunamiAreaName)(areaName, tsunamiColor((_c = (_b = item.Category) === null || _b === void 0 ? void 0 : _b.Kind) === null || _c === void 0 ? void 0 : _c.Name));
+        return line ? [line] : [];
     });
 }
 function flattenAreaEntries(areaConst) {
@@ -438,7 +493,7 @@ function localScaleImage(scale) {
 }
 function buildEewEmbed(message) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r;
         const hypocenter = (_a = message.earthquake) === null || _a === void 0 ? void 0 : _a.hypocenter;
         const maxScale = Math.max(...((_b = message.areas) !== null && _b !== void 0 ? _b : []).map(area => area.scaleTo), 0);
         const strongAreas = [...((_c = message.areas) !== null && _c !== void 0 ? _c : [])]
@@ -449,14 +504,18 @@ function buildEewEmbed(message) {
         const coordinateLink = formatCoordinate(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.latitude, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.longitude);
         const jmaDetail = yield findJmaDetailForP2P((_d = message.issue) === null || _d === void 0 ? void 0 : _d.eventId, (_e = message.earthquake) === null || _e === void 0 ? void 0 : _e.originTime, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.magnitude).catch(() => null);
         const intensityMap = jmaDetail ? yield (0, intensity_map_1.createIntensityMapAttachment)(jmaDetail, 'intensity-map.png') : null;
+        const jmaHypocenter = (_h = (_g = (_f = jmaDetail === null || jmaDetail === void 0 ? void 0 : jmaDetail.Body) === null || _f === void 0 ? void 0 : _f.Earthquake) === null || _g === void 0 ? void 0 : _g.Hypocenter) === null || _h === void 0 ? void 0 : _h.Area;
         const scaleImage = localScaleImage(maxScale);
         const title = message.cancelled ? '緊急地震速報 取消' : '緊急地震速報';
-        const serial = ((_f = message.issue) === null || _f === void 0 ? void 0 : _f.serial) ? `第${message.issue.serial}報` : '速報';
+        const serial = ((_j = message.issue) === null || _j === void 0 ? void 0 : _j.serial) ? `第${message.issue.serial}報` : '速報';
+        const content = message.cancelled
+            ? `緊急地震速報 取消: ${(_k = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name) !== null && _k !== void 0 ? _k : '震源不明'}`
+            : `緊急地震速報: ${(_l = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name) !== null && _l !== void 0 ? _l : '震源不明'} 最大予測震度 ${maxScale > 0 ? scaleToString(maxScale) : '不明'}`;
         const embed = new discord_js_1.EmbedBuilder()
             .setTitle(`${title} (${serial})`)
             .setColor(message.cancelled ? 0x808080 : 0xff2d2d)
             .setDescription(message.cancelled ? 'この緊急地震速報は取り消されました。' : '強い揺れに警戒してください。身の安全を確保してください。')
-            .addFields({ name: '震源', value: (_g = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name) !== null && _g !== void 0 ? _g : '不明', inline: true }, { name: '規模', value: formatMagnitude(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.magnitude), inline: true }, { name: '深さ', value: formatDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.depth), inline: true }, { name: '最大予測震度', value: maxScale > 0 ? scaleToString(maxScale) : '不明', inline: true }, { name: '発生時刻', value: (_j = (_h = message.earthquake) === null || _h === void 0 ? void 0 : _h.originTime) !== null && _j !== void 0 ? _j : '不明', inline: true }, { name: '発表時刻', value: (_m = (_l = (_k = message.issue) === null || _k === void 0 ? void 0 : _k.time) !== null && _l !== void 0 ? _l : message.time) !== null && _m !== void 0 ? _m : '不明', inline: true })
+            .addFields({ name: '震源', value: (_m = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name) !== null && _m !== void 0 ? _m : '不明', inline: true }, { name: '規模', value: formatMagnitude(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.magnitude), inline: true }, { name: '深さ', value: formatJmaDepth((_o = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.depth) !== null && _o !== void 0 ? _o : jmaHypocenter === null || jmaHypocenter === void 0 ? void 0 : jmaHypocenter.Depth, jmaHypocenter === null || jmaHypocenter === void 0 ? void 0 : jmaHypocenter.Coordinate), inline: true }, { name: '最大予測震度', value: maxScale > 0 ? scaleToString(maxScale) : '不明', inline: true }, { name: '発生時刻', value: formatJstTime((_p = message.earthquake) === null || _p === void 0 ? void 0 : _p.originTime), inline: true }, { name: '発表時刻', value: formatJstTime((_r = (_q = message.issue) === null || _q === void 0 ? void 0 : _q.time) !== null && _r !== void 0 ? _r : message.time), inline: true })
             .setFooter({ text: 'Source: P2P地震情報 / 気象庁' })
             .setTimestamp(new Date());
         if (coordinateLink) {
@@ -472,28 +531,30 @@ function buildEewEmbed(message) {
             embed.setImage('attachment://intensity-map.png');
         }
         const files = [scaleImage, intensityMap].filter((file) => Boolean(file));
-        return files.length ? { embeds: [embed], files } : { embeds: [embed] };
+        return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] };
     });
 }
 function buildP2PQuakeEmbed(message) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
         const quake = message.earthquake;
         const hypocenter = quake === null || quake === void 0 ? void 0 : quake.hypocenter;
         const scaleImage = localScaleImage(quake === null || quake === void 0 ? void 0 : quake.maxScale);
         const coordinateLink = formatCoordinate(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.latitude, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.longitude);
         const jmaDetail = yield findJmaDetailForP2P(undefined, quake === null || quake === void 0 ? void 0 : quake.time, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.magnitude).catch(() => null);
         const intensityMap = jmaDetail ? yield (0, intensity_map_1.createIntensityMapAttachment)(jmaDetail, 'intensity-map.png') : null;
-        const observedPoints = [...((_a = message.points) !== null && _a !== void 0 ? _a : [])]
+        const jmaHypocenter = (_c = (_b = (_a = jmaDetail === null || jmaDetail === void 0 ? void 0 : jmaDetail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake) === null || _b === void 0 ? void 0 : _b.Hypocenter) === null || _c === void 0 ? void 0 : _c.Area;
+        const observedPoints = [...((_d = message.points) !== null && _d !== void 0 ? _d : [])]
             .sort((a, b) => { var _a, _b; return ((_a = b.scale) !== null && _a !== void 0 ? _a : 0) - ((_b = a.scale) !== null && _b !== void 0 ? _b : 0); })
             .slice(0, 8)
             .map(point => { var _a, _b; return `${(_a = point.pref) !== null && _a !== void 0 ? _a : ''}${(_b = point.addr) !== null && _b !== void 0 ? _b : ''}: ${scaleToString(point.scale)}`; })
             .join('\n');
+        const content = `地震情報: ${(_e = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name) !== null && _e !== void 0 ? _e : '震源不明'} 最大震度 ${scaleToString(quake === null || quake === void 0 ? void 0 : quake.maxScale)}`;
         const embed = new discord_js_1.EmbedBuilder()
             .setTitle('地震情報')
             .setColor(0x2d6cdf)
-            .addFields({ name: '震源', value: (_b = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name) !== null && _b !== void 0 ? _b : '不明', inline: true }, { name: '規模', value: formatMagnitude(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.magnitude), inline: true }, { name: '深さ', value: formatDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.depth), inline: true }, { name: '最大震度', value: scaleToString(quake === null || quake === void 0 ? void 0 : quake.maxScale), inline: true }, { name: '発生時刻', value: (_c = quake === null || quake === void 0 ? void 0 : quake.time) !== null && _c !== void 0 ? _c : '不明', inline: true }, { name: '津波', value: (quake === null || quake === void 0 ? void 0 : quake.domesticTsunami) === 'None' ? '心配なし' : (_d = quake === null || quake === void 0 ? void 0 : quake.domesticTsunami) !== null && _d !== void 0 ? _d : '不明', inline: true })
-            .setFooter({ text: `Source: ${(_f = (_e = message.issue) === null || _e === void 0 ? void 0 : _e.source) !== null && _f !== void 0 ? _f : 'P2P地震情報 / 気象庁'}` })
+            .addFields({ name: '震源', value: (_f = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.name) !== null && _f !== void 0 ? _f : '不明', inline: true }, { name: '規模', value: formatMagnitude(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.magnitude), inline: true }, { name: '深さ', value: formatJmaDepth((_g = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.depth) !== null && _g !== void 0 ? _g : jmaHypocenter === null || jmaHypocenter === void 0 ? void 0 : jmaHypocenter.Depth, jmaHypocenter === null || jmaHypocenter === void 0 ? void 0 : jmaHypocenter.Coordinate), inline: true }, { name: '最大震度', value: scaleToString(quake === null || quake === void 0 ? void 0 : quake.maxScale), inline: true }, { name: '発生時刻', value: formatJstTime(quake === null || quake === void 0 ? void 0 : quake.time), inline: true }, { name: '津波', value: (quake === null || quake === void 0 ? void 0 : quake.domesticTsunami) === 'None' ? '心配なし' : (_h = quake === null || quake === void 0 ? void 0 : quake.domesticTsunami) !== null && _h !== void 0 ? _h : '不明', inline: true })
+            .setFooter({ text: `Source: ${(_k = (_j = message.issue) === null || _j === void 0 ? void 0 : _j.source) !== null && _k !== void 0 ? _k : 'P2P地震情報 / 気象庁'}` })
             .setTimestamp(new Date());
         if (coordinateLink) {
             embed.addFields({ name: '地図', value: coordinateLink, inline: true });
@@ -508,7 +569,7 @@ function buildP2PQuakeEmbed(message) {
             embed.setImage('attachment://intensity-map.png');
         }
         const files = [scaleImage, intensityMap].filter((file) => Boolean(file));
-        return files.length ? { embeds: [embed], files } : { embeds: [embed] };
+        return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] };
     });
 }
 function isValidJmaJsonPath(jsonPath) {
@@ -519,7 +580,7 @@ function isValidJmaJsonPath(jsonPath) {
 }
 function buildJmaQuakeEmbed(detail) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
         const earthquake = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake;
         const hypocenter = (_b = earthquake === null || earthquake === void 0 ? void 0 : earthquake.Hypocenter) === null || _b === void 0 ? void 0 : _b.Area;
         const maxScale = (_e = (_d = (_c = detail.Body) === null || _c === void 0 ? void 0 : _c.Intensity) === null || _d === void 0 ? void 0 : _d.Observation) === null || _e === void 0 ? void 0 : _e.MaxInt;
@@ -528,11 +589,12 @@ function buildJmaQuakeEmbed(detail) {
         const intensityMap = yield (0, intensity_map_1.createIntensityMapAttachment)(detail, 'intensity-map.png');
         const scaleImage = localScaleImage(maxScale);
         const text = (_f = detail.Head) === null || _f === void 0 ? void 0 : _f.Text;
+        const content = `地震情報: ${(_g = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Name) !== null && _g !== void 0 ? _g : '震源不明'} 最大震度 ${scaleToString(maxScale)}`;
         const embed = new discord_js_1.EmbedBuilder()
-            .setTitle((_h = (_g = detail.Head) === null || _g === void 0 ? void 0 : _g.Title) !== null && _h !== void 0 ? _h : '地震情報')
+            .setTitle((_j = (_h = detail.Head) === null || _h === void 0 ? void 0 : _h.Title) !== null && _j !== void 0 ? _j : '地震情報')
             .setColor(0x2d6cdf)
             .setDescription(text || '気象庁から新しい地震情報が発表されました。')
-            .addFields({ name: '震源', value: (_j = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Name) !== null && _j !== void 0 ? _j : '不明', inline: true }, { name: '規模', value: formatMagnitude(earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude), inline: true }, { name: '深さ', value: formatDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Depth), inline: true }, { name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: '発生時刻', value: (_l = (_k = earthquake === null || earthquake === void 0 ? void 0 : earthquake.OriginTime) !== null && _k !== void 0 ? _k : earthquake === null || earthquake === void 0 ? void 0 : earthquake.ArrivalTime) !== null && _l !== void 0 ? _l : '不明', inline: true }, { name: '発表時刻', value: (_o = (_m = detail.Head) === null || _m === void 0 ? void 0 : _m.ReportDateTime) !== null && _o !== void 0 ? _o : '不明', inline: true })
+            .addFields({ name: '震源', value: (_k = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Name) !== null && _k !== void 0 ? _k : '不明', inline: true }, { name: '規模', value: formatMagnitude(earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude), inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Depth, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Coordinate), inline: true }, { name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: '発生時刻', value: formatJstTime((_l = earthquake === null || earthquake === void 0 ? void 0 : earthquake.OriginTime) !== null && _l !== void 0 ? _l : earthquake === null || earthquake === void 0 ? void 0 : earthquake.ArrivalTime), inline: true }, { name: '発表時刻', value: formatJstTime((_m = detail.Head) === null || _m === void 0 ? void 0 : _m.ReportDateTime), inline: true })
             .setFooter({ text: 'Source: 気象庁' })
             .setTimestamp(new Date());
         if (intensityMap) {
@@ -545,16 +607,16 @@ function buildJmaQuakeEmbed(detail) {
             embed.setThumbnail(`attachment://${scaleImage.name}`);
         }
         const files = [scaleImage, intensityMap].filter((file) => Boolean(file));
-        return files.length ? { embeds: [embed], files } : { embeds: [embed] };
+        return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] };
     });
 }
 function buildJmaTsunamiEmbed(detail) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u;
         const items = (_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Tsunami) === null || _b === void 0 ? void 0 : _b.Forecast) === null || _c === void 0 ? void 0 : _c.Item) !== null && _d !== void 0 ? _d : [];
         const earthquake = (_f = (_e = detail.Body) === null || _e === void 0 ? void 0 : _e.Earthquake) === null || _f === void 0 ? void 0 : _f[0];
-        const points = collectTsunamiPoints(detail);
-        const disasterMap = yield (0, disaster_map_1.createDisasterMapAttachment)(points, 'tsunami-map.png');
+        const lines = collectTsunamiLines(detail);
+        const disasterMap = yield (0, disaster_map_1.createDisasterMapAttachment)([], 'tsunami-map.png', lines);
         const affectedAreas = items
             .slice(0, 12)
             .map(item => {
@@ -565,11 +627,12 @@ function buildJmaTsunamiEmbed(detail) {
             return `${area}: ${kind}${height}`;
         })
             .join('\n');
+        const content = `${(_h = (_g = detail.Head) === null || _g === void 0 ? void 0 : _g.Title) !== null && _h !== void 0 ? _h : '津波情報'}: ${items.slice(0, 3).map(item => { var _a; return (_a = item.Area) === null || _a === void 0 ? void 0 : _a.Name; }).filter(Boolean).join('、') || '対象地域不明'}`;
         const embed = new discord_js_1.EmbedBuilder()
-            .setTitle((_h = (_g = detail.Head) === null || _g === void 0 ? void 0 : _g.Title) !== null && _h !== void 0 ? _h : '津波情報')
+            .setTitle((_k = (_j = detail.Head) === null || _j === void 0 ? void 0 : _j.Title) !== null && _k !== void 0 ? _k : '津波情報')
             .setColor(0xff1f1f)
-            .setDescription((_o = (_l = (_k = (_j = detail.Head) === null || _j === void 0 ? void 0 : _j.Headline) === null || _k === void 0 ? void 0 : _k.Text) !== null && _l !== void 0 ? _l : (_m = detail.Body) === null || _m === void 0 ? void 0 : _m.Text) !== null && _o !== void 0 ? _o : '気象庁から津波に関する情報が発表されました。')
-            .addFields({ name: '震源', value: (_r = (_q = (_p = earthquake === null || earthquake === void 0 ? void 0 : earthquake.Hypocenter) === null || _p === void 0 ? void 0 : _p.Area) === null || _q === void 0 ? void 0 : _q.Name) !== null && _r !== void 0 ? _r : '不明', inline: true }, { name: '規模', value: formatMagnitude(earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude), inline: true }, { name: '発表時刻', value: (_t = (_s = detail.Head) === null || _s === void 0 ? void 0 : _s.ReportDateTime) !== null && _t !== void 0 ? _t : '不明', inline: true })
+            .setDescription((_q = (_o = (_m = (_l = detail.Head) === null || _l === void 0 ? void 0 : _l.Headline) === null || _m === void 0 ? void 0 : _m.Text) !== null && _o !== void 0 ? _o : (_p = detail.Body) === null || _p === void 0 ? void 0 : _p.Text) !== null && _q !== void 0 ? _q : '気象庁から津波に関する情報が発表されました。')
+            .addFields({ name: '震源', value: (_t = (_s = (_r = earthquake === null || earthquake === void 0 ? void 0 : earthquake.Hypocenter) === null || _r === void 0 ? void 0 : _r.Area) === null || _s === void 0 ? void 0 : _s.Name) !== null && _t !== void 0 ? _t : '不明', inline: true }, { name: '規模', value: formatMagnitude(earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude), inline: true }, { name: '発表時刻', value: formatJstTime((_u = detail.Head) === null || _u === void 0 ? void 0 : _u.ReportDateTime), inline: true })
             .setFooter({ text: 'Source: 気象庁' })
             .setTimestamp(new Date());
         if (affectedAreas) {
@@ -578,7 +641,7 @@ function buildJmaTsunamiEmbed(detail) {
         if (disasterMap) {
             embed.setImage('attachment://tsunami-map.png');
         }
-        return disasterMap ? { embeds: [embed], files: [disasterMap] } : { embeds: [embed] };
+        return disasterMap ? { content, embeds: [embed], files: [disasterMap] } : { content, embeds: [embed] };
     });
 }
 function buildJmaFloodEmbed(areas) {
@@ -594,6 +657,7 @@ function buildJmaFloodEmbed(areas) {
             .slice(0, 16)
             .map(area => `${area.name}: ${area.statuses.join(' / ')}`)
             .join('\n');
+        const content = `洪水警報・注意報: ${areas.length}地域で発表中`;
         const embed = new discord_js_1.EmbedBuilder()
             .setTitle('洪水警報・注意報')
             .setColor(areas.some(area => area.statuses.includes('洪水警報')) ? 0xff1f1f : 0xffff00)
@@ -607,7 +671,7 @@ function buildJmaFloodEmbed(areas) {
         if (disasterMap) {
             embed.setImage('attachment://flood-map.png');
         }
-        return disasterMap ? { embeds: [embed], files: [disasterMap] } : { embeds: [embed] };
+        return disasterMap ? { content, embeds: [embed], files: [disasterMap] } : { content, embeds: [embed] };
     });
 }
 function pollJmaQuake(client) {

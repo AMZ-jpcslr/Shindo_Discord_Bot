@@ -49,6 +49,47 @@ function formatDepth(depth) {
         return depth === 0 ? 'ごく浅い' : `${depth}km`;
     return depth;
 }
+function depthFromJmaCoordinate(coordinate) {
+    if (!coordinate)
+        return null;
+    const match = coordinate.match(/[+-]\d+(?:\.\d+)?[+-]\d+(?:\.\d+)?([+-]\d+)\/?/);
+    if (!match)
+        return null;
+    const meters = Math.abs(Number(match[1]));
+    if (!Number.isFinite(meters))
+        return null;
+    return Math.round(meters / 1000);
+}
+function formatJmaDepth(depth, coordinate) {
+    const coordinateDepth = depthFromJmaCoordinate(coordinate);
+    if (coordinateDepth !== null)
+        return coordinateDepth === 0 ? 'ごく浅い' : `${coordinateDepth}km`;
+    return formatDepth(depth);
+}
+function formatJstTime(time) {
+    if (!time)
+        return '不明';
+    const normalized = time.includes('T')
+        ? time
+        : time.replace(/\//g, '-').replace(' ', 'T');
+    const dateSource = /(?:Z|[+-]\d{2}:?\d{2})$/.test(normalized)
+        ? normalized
+        : `${normalized}+09:00`;
+    const date = new Date(dateSource);
+    if (Number.isNaN(date.getTime()))
+        return time;
+    const parts = new Intl.DateTimeFormat('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    }).formatToParts(date);
+    const value = (type) => { var _a, _b; return (_b = (_a = parts.find(part => part.type === type)) === null || _a === void 0 ? void 0 : _a.value) !== null && _b !== void 0 ? _b : ''; };
+    return `${value('year')}年${value('month')}月${value('day')}日 ${value('hour')}:${value('minute')}`;
+}
 function localScaleImage(scale) {
     const value = typeof scale === 'string' ? Number(scale) : scale;
     const fileNameByScale = {
@@ -139,7 +180,7 @@ function fetchJmaDetail(jsonPath) {
 }
 function buildJmaEmbed(detail) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
         const earthquake = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake;
         const hypocenter = (_b = earthquake === null || earthquake === void 0 ? void 0 : earthquake.Hypocenter) === null || _b === void 0 ? void 0 : _b.Area;
         const maxScale = (_e = (_d = (_c = detail.Body) === null || _c === void 0 ? void 0 : _c.Intensity) === null || _d === void 0 ? void 0 : _d.Observation) === null || _e === void 0 ? void 0 : _e.MaxInt;
@@ -150,7 +191,7 @@ function buildJmaEmbed(detail) {
             .setTitle((_g = (_f = detail.Head) === null || _f === void 0 ? void 0 : _f.Title) !== null && _g !== void 0 ? _g : '直近の地震情報')
             .setColor(0x2d6cdf)
             .setDescription(((_h = detail.Head) === null || _h === void 0 ? void 0 : _h.Text) || '気象庁から発表された直近の地震情報です。')
-            .addFields({ name: '震源', value: (_j = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Name) !== null && _j !== void 0 ? _j : '不明', inline: true }, { name: '規模', value: (earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude) ? `M${earthquake.Magnitude}` : '不明', inline: true }, { name: '深さ', value: formatDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Depth), inline: true }, { name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: '発生時刻', value: (_l = (_k = earthquake === null || earthquake === void 0 ? void 0 : earthquake.OriginTime) !== null && _k !== void 0 ? _k : earthquake === null || earthquake === void 0 ? void 0 : earthquake.ArrivalTime) !== null && _l !== void 0 ? _l : '不明', inline: true }, { name: '発表時刻', value: (_o = (_m = detail.Head) === null || _m === void 0 ? void 0 : _m.ReportDateTime) !== null && _o !== void 0 ? _o : '不明', inline: true })
+            .addFields({ name: '震源', value: (_j = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Name) !== null && _j !== void 0 ? _j : '不明', inline: true }, { name: '規模', value: (earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude) ? `M${earthquake.Magnitude}` : '不明', inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Depth, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Coordinate), inline: true }, { name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: '発生時刻', value: formatJstTime((_k = earthquake === null || earthquake === void 0 ? void 0 : earthquake.OriginTime) !== null && _k !== void 0 ? _k : earthquake === null || earthquake === void 0 ? void 0 : earthquake.ArrivalTime), inline: true }, { name: '発表時刻', value: formatJstTime((_l = detail.Head) === null || _l === void 0 ? void 0 : _l.ReportDateTime), inline: true })
             .setFooter({ text: 'Source: 気象庁' });
         if (intensityMap) {
             embed.setImage('attachment://intensity-map.png');

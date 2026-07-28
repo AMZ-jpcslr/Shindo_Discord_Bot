@@ -7,7 +7,7 @@ import {
 import fs from 'fs'
 import path from 'path'
 import WebSocket from 'ws'
-import { createDisasterMapAttachment, pointForAreaName, type DisasterMapPoint } from './disaster_map'
+import { createDisasterMapAttachment, lineForTsunamiAreaName, pointForAreaName, type DisasterMapLine, type DisasterMapPoint } from './disaster_map'
 import { createIntensityMapAttachment } from './intensity_map'
 
 const DATA_DIR = path.join(__dirname, '../../data')
@@ -142,6 +142,12 @@ type JmaQuakeDetail = {
             }
         }
     }
+}
+
+type DiscordPayload = {
+    content?: string
+    embeds: EmbedBuilder[]
+    files?: AttachmentBuilder[]
 }
 
 type JmaTsunamiListItem = {
@@ -280,7 +286,7 @@ function saveLatestIds(latestIds: LatestIds) {
 }
 
 type SendableGuildChannel = GuildBasedChannel & {
-    send: (payload: { embeds: EmbedBuilder[], files?: AttachmentBuilder[] }) => Promise<unknown>
+    send: (payload: DiscordPayload) => Promise<unknown>
 }
 
 function isSendableChannel(channel: GuildBasedChannel | null | undefined): channel is SendableGuildChannel {
@@ -289,7 +295,7 @@ function isSendableChannel(channel: GuildBasedChannel | null | undefined): chann
 
 async function sendToConfiguredChannels(
     client: Client,
-    payload: { embeds: EmbedBuilder[], files?: AttachmentBuilder[] },
+    payload: DiscordPayload,
     maxScale: number | string | undefined,
 ) {
     const channels = loadEqChannels()
@@ -317,7 +323,7 @@ async function sendToConfiguredChannels(
 
 async function sendDisasterToConfiguredChannels(
     client: Client,
-    payload: { embeds: EmbedBuilder[], files?: AttachmentBuilder[] },
+    payload: DiscordPayload,
 ) {
     const channels = loadEqChannels()
 
@@ -386,6 +392,51 @@ function formatDepth(depth: number | string | undefined): string {
     if (depth === undefined || depth === null || depth === '') return '不明'
     if (typeof depth === 'number') return depth === 0 ? 'ごく浅い' : `${depth}km`
     return depth
+}
+
+function depthFromJmaCoordinate(coordinate?: string): number | null {
+    if (!coordinate) return null
+
+    const match = coordinate.match(/[+-]\d+(?:\.\d+)?[+-]\d+(?:\.\d+)?([+-]\d+)\/?/)
+    if (!match) return null
+
+    const meters = Math.abs(Number(match[1]))
+    if (!Number.isFinite(meters)) return null
+
+    return Math.round(meters / 1000)
+}
+
+function formatJmaDepth(depth: number | string | undefined, coordinate?: string): string {
+    const coordinateDepth = depthFromJmaCoordinate(coordinate)
+    if (coordinateDepth !== null) return coordinateDepth === 0 ? 'ごく浅い' : `${coordinateDepth}km`
+
+    return formatDepth(depth)
+}
+
+function formatJstTime(time?: string): string {
+    if (!time) return '不明'
+
+    const normalized = time.includes('T')
+        ? time
+        : time.replace(/\//g, '-').replace(' ', 'T')
+    const dateSource = /(?:Z|[+-]\d{2}:?\d{2})$/.test(normalized)
+        ? normalized
+        : `${normalized}+09:00`
+    const date = new Date(dateSource)
+    if (Number.isNaN(date.getTime())) return time
+
+    const parts = new Intl.DateTimeFormat('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    }).formatToParts(date)
+    const value = (type: string) => parts.find(part => part.type === type)?.value ?? ''
+
+    return `${value('year')}年${value('month')}月${value('day')}日 ${value('hour')}:${value('minute')}`
 }
 
 function formatMagnitude(magnitude: number | string | undefined): string {
@@ -494,6 +545,7 @@ async function findJmaDetailForP2P(
 
 function tsunamiColor(kindName?: string): string {
     if (!kindName) return '#2d6cdf'
+    if (kindName.includes('解除')) return '#9aa0a6'
     if (kindName.includes('大津波')) return '#d900ff'
     if (kindName.includes('津波警報')) return '#ff1f1f'
     if (kindName.includes('津波注意報')) return '#ffff00'
@@ -516,6 +568,18 @@ function collectTsunamiPoints(detail: JmaTsunamiDetail): DisasterMapPoint[] {
             longitude: coordinate.longitude,
             color: tsunamiColor(item.Category?.Kind?.Name),
         }]
+    })
+}
+
+function collectTsunamiLines(detail: JmaTsunamiDetail): DisasterMapLine[] {
+    const items = detail.Body?.Tsunami?.Forecast?.Item ?? []
+
+    return items.flatMap(item => {
+        const areaName = item.Area?.Name
+        if (!areaName) return []
+
+        const line = lineForTsunamiAreaName(areaName, tsunamiColor(item.Category?.Kind?.Name))
+        return line ? [line] : []
     })
 }
 
@@ -661,7 +725,7 @@ function localScaleImage(scale: number | string | undefined): AttachmentBuilder 
     return new AttachmentBuilder(filePath, { name: fileName })
 }
 
-async function buildEewEmbed(message: P2PEewMessage): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
+async function buildEewEmbed(message: P2PEewMessage): Promise<DiscordPayload> {
     const hypocenter = message.earthquake?.hypocenter
     const maxScale = Math.max(...(message.areas ?? []).map(area => area.scaleTo), 0)
     const strongAreas = [...(message.areas ?? [])]
@@ -678,9 +742,13 @@ async function buildEewEmbed(message: P2PEewMessage): Promise<{ embeds: EmbedBui
         hypocenter?.magnitude,
     ).catch(() => null)
     const intensityMap = jmaDetail ? await createIntensityMapAttachment(jmaDetail, 'intensity-map.png') : null
+    const jmaHypocenter = jmaDetail?.Body?.Earthquake?.Hypocenter?.Area
     const scaleImage = localScaleImage(maxScale)
     const title = message.cancelled ? '緊急地震速報 取消' : '緊急地震速報'
     const serial = message.issue?.serial ? `第${message.issue.serial}報` : '速報'
+    const content = message.cancelled
+        ? `緊急地震速報 取消: ${hypocenter?.name ?? '震源不明'}`
+        : `緊急地震速報: ${hypocenter?.name ?? '震源不明'} 最大予測震度 ${maxScale > 0 ? scaleToString(maxScale) : '不明'}`
 
     const embed = new EmbedBuilder()
         .setTitle(`${title} (${serial})`)
@@ -689,10 +757,10 @@ async function buildEewEmbed(message: P2PEewMessage): Promise<{ embeds: EmbedBui
         .addFields(
             { name: '震源', value: hypocenter?.name ?? '不明', inline: true },
             { name: '規模', value: formatMagnitude(hypocenter?.magnitude), inline: true },
-            { name: '深さ', value: formatDepth(hypocenter?.depth), inline: true },
+            { name: '深さ', value: formatJmaDepth(hypocenter?.depth ?? jmaHypocenter?.Depth, jmaHypocenter?.Coordinate), inline: true },
             { name: '最大予測震度', value: maxScale > 0 ? scaleToString(maxScale) : '不明', inline: true },
-            { name: '発生時刻', value: message.earthquake?.originTime ?? '不明', inline: true },
-            { name: '発表時刻', value: message.issue?.time ?? message.time ?? '不明', inline: true },
+            { name: '発生時刻', value: formatJstTime(message.earthquake?.originTime), inline: true },
+            { name: '発表時刻', value: formatJstTime(message.issue?.time ?? message.time), inline: true },
         )
         .setFooter({ text: 'Source: P2P地震情報 / 気象庁' })
         .setTimestamp(new Date())
@@ -714,10 +782,10 @@ async function buildEewEmbed(message: P2PEewMessage): Promise<{ embeds: EmbedBui
     }
 
     const files = [scaleImage, intensityMap].filter((file): file is AttachmentBuilder => Boolean(file))
-    return files.length ? { embeds: [embed], files } : { embeds: [embed] }
+    return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] }
 }
 
-async function buildP2PQuakeEmbed(message: P2PQuakeMessage): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
+async function buildP2PQuakeEmbed(message: P2PQuakeMessage): Promise<DiscordPayload> {
     const quake = message.earthquake
     const hypocenter = quake?.hypocenter
     const scaleImage = localScaleImage(quake?.maxScale)
@@ -729,11 +797,13 @@ async function buildP2PQuakeEmbed(message: P2PQuakeMessage): Promise<{ embeds: E
         hypocenter?.magnitude,
     ).catch(() => null)
     const intensityMap = jmaDetail ? await createIntensityMapAttachment(jmaDetail, 'intensity-map.png') : null
+    const jmaHypocenter = jmaDetail?.Body?.Earthquake?.Hypocenter?.Area
     const observedPoints = [...(message.points ?? [])]
         .sort((a, b) => (b.scale ?? 0) - (a.scale ?? 0))
         .slice(0, 8)
         .map(point => `${point.pref ?? ''}${point.addr ?? ''}: ${scaleToString(point.scale)}`)
         .join('\n')
+    const content = `地震情報: ${hypocenter?.name ?? '震源不明'} 最大震度 ${scaleToString(quake?.maxScale)}`
 
     const embed = new EmbedBuilder()
         .setTitle('地震情報')
@@ -741,9 +811,9 @@ async function buildP2PQuakeEmbed(message: P2PQuakeMessage): Promise<{ embeds: E
         .addFields(
             { name: '震源', value: hypocenter?.name ?? '不明', inline: true },
             { name: '規模', value: formatMagnitude(hypocenter?.magnitude), inline: true },
-            { name: '深さ', value: formatDepth(hypocenter?.depth), inline: true },
+            { name: '深さ', value: formatJmaDepth(hypocenter?.depth ?? jmaHypocenter?.Depth, jmaHypocenter?.Coordinate), inline: true },
             { name: '最大震度', value: scaleToString(quake?.maxScale), inline: true },
-            { name: '発生時刻', value: quake?.time ?? '不明', inline: true },
+            { name: '発生時刻', value: formatJstTime(quake?.time), inline: true },
             { name: '津波', value: quake?.domesticTsunami === 'None' ? '心配なし' : quake?.domesticTsunami ?? '不明', inline: true },
         )
         .setFooter({ text: `Source: ${message.issue?.source ?? 'P2P地震情報 / 気象庁'}` })
@@ -766,7 +836,7 @@ async function buildP2PQuakeEmbed(message: P2PQuakeMessage): Promise<{ embeds: E
     }
 
     const files = [scaleImage, intensityMap].filter((file): file is AttachmentBuilder => Boolean(file))
-    return files.length ? { embeds: [embed], files } : { embeds: [embed] }
+    return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] }
 }
 
 function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
@@ -778,7 +848,7 @@ function isValidJmaJsonPath(jsonPath: unknown): jsonPath is string {
     )
 }
 
-async function buildJmaQuakeEmbed(detail: JmaQuakeDetail): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
+async function buildJmaQuakeEmbed(detail: JmaQuakeDetail): Promise<DiscordPayload> {
     const earthquake = detail.Body?.Earthquake
     const hypocenter = earthquake?.Hypocenter?.Area
     const maxScale = detail.Body?.Intensity?.Observation?.MaxInt
@@ -787,6 +857,7 @@ async function buildJmaQuakeEmbed(detail: JmaQuakeDetail): Promise<{ embeds: Emb
     const intensityMap = await createIntensityMapAttachment(detail, 'intensity-map.png')
     const scaleImage = localScaleImage(maxScale)
     const text = detail.Head?.Text
+    const content = `地震情報: ${hypocenter?.Name ?? '震源不明'} 最大震度 ${scaleToString(maxScale)}`
 
     const embed = new EmbedBuilder()
         .setTitle(detail.Head?.Title ?? '地震情報')
@@ -795,10 +866,10 @@ async function buildJmaQuakeEmbed(detail: JmaQuakeDetail): Promise<{ embeds: Emb
         .addFields(
             { name: '震源', value: hypocenter?.Name ?? '不明', inline: true },
             { name: '規模', value: formatMagnitude(earthquake?.Magnitude), inline: true },
-            { name: '深さ', value: formatDepth(hypocenter?.Depth), inline: true },
+            { name: '深さ', value: formatJmaDepth(hypocenter?.Depth, hypocenter?.Coordinate), inline: true },
             { name: '最大震度', value: scaleToString(maxScale), inline: true },
-            { name: '発生時刻', value: earthquake?.OriginTime ?? earthquake?.ArrivalTime ?? '不明', inline: true },
-            { name: '発表時刻', value: detail.Head?.ReportDateTime ?? '不明', inline: true },
+            { name: '発生時刻', value: formatJstTime(earthquake?.OriginTime ?? earthquake?.ArrivalTime), inline: true },
+            { name: '発表時刻', value: formatJstTime(detail.Head?.ReportDateTime), inline: true },
         )
         .setFooter({ text: 'Source: 気象庁' })
         .setTimestamp(new Date())
@@ -816,14 +887,14 @@ async function buildJmaQuakeEmbed(detail: JmaQuakeDetail): Promise<{ embeds: Emb
     }
 
     const files = [scaleImage, intensityMap].filter((file): file is AttachmentBuilder => Boolean(file))
-    return files.length ? { embeds: [embed], files } : { embeds: [embed] }
+    return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] }
 }
 
-async function buildJmaTsunamiEmbed(detail: JmaTsunamiDetail): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
+async function buildJmaTsunamiEmbed(detail: JmaTsunamiDetail): Promise<DiscordPayload> {
     const items = detail.Body?.Tsunami?.Forecast?.Item ?? []
     const earthquake = detail.Body?.Earthquake?.[0]
-    const points = collectTsunamiPoints(detail)
-    const disasterMap = await createDisasterMapAttachment(points, 'tsunami-map.png')
+    const lines = collectTsunamiLines(detail)
+    const disasterMap = await createDisasterMapAttachment([], 'tsunami-map.png', lines)
     const affectedAreas = items
         .slice(0, 12)
         .map(item => {
@@ -833,6 +904,7 @@ async function buildJmaTsunamiEmbed(detail: JmaTsunamiDetail): Promise<{ embeds:
             return `${area}: ${kind}${height}`
         })
         .join('\n')
+    const content = `${detail.Head?.Title ?? '津波情報'}: ${items.slice(0, 3).map(item => item.Area?.Name).filter(Boolean).join('、') || '対象地域不明'}`
 
     const embed = new EmbedBuilder()
         .setTitle(detail.Head?.Title ?? '津波情報')
@@ -841,7 +913,7 @@ async function buildJmaTsunamiEmbed(detail: JmaTsunamiDetail): Promise<{ embeds:
         .addFields(
             { name: '震源', value: earthquake?.Hypocenter?.Area?.Name ?? '不明', inline: true },
             { name: '規模', value: formatMagnitude(earthquake?.Magnitude), inline: true },
-            { name: '発表時刻', value: detail.Head?.ReportDateTime ?? '不明', inline: true },
+            { name: '発表時刻', value: formatJstTime(detail.Head?.ReportDateTime), inline: true },
         )
         .setFooter({ text: 'Source: 気象庁' })
         .setTimestamp(new Date())
@@ -854,12 +926,12 @@ async function buildJmaTsunamiEmbed(detail: JmaTsunamiDetail): Promise<{ embeds:
         embed.setImage('attachment://tsunami-map.png')
     }
 
-    return disasterMap ? { embeds: [embed], files: [disasterMap] } : { embeds: [embed] }
+    return disasterMap ? { content, embeds: [embed], files: [disasterMap] } : { content, embeds: [embed] }
 }
 
 async function buildJmaFloodEmbed(
     areas: ReturnType<typeof collectFloodAreas>,
-): Promise<{ embeds: EmbedBuilder[], files?: AttachmentBuilder[] }> {
+): Promise<DiscordPayload> {
     const points = areas.map((area, index) => ({
         label: String(index + 1),
         latitude: area.point.latitude,
@@ -871,6 +943,7 @@ async function buildJmaFloodEmbed(
         .slice(0, 16)
         .map(area => `${area.name}: ${area.statuses.join(' / ')}`)
         .join('\n')
+    const content = `洪水警報・注意報: ${areas.length}地域で発表中`
 
     const embed = new EmbedBuilder()
         .setTitle('洪水警報・注意報')
@@ -891,7 +964,7 @@ async function buildJmaFloodEmbed(
         embed.setImage('attachment://flood-map.png')
     }
 
-    return disasterMap ? { embeds: [embed], files: [disasterMap] } : { embeds: [embed] }
+    return disasterMap ? { content, embeds: [embed], files: [disasterMap] } : { content, embeds: [embed] }
 }
 
 async function pollJmaQuake(client: Client) {

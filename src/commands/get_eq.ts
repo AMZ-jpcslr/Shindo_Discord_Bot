@@ -90,6 +90,51 @@ function formatDepth(depth: number | string | undefined): string {
     return depth
 }
 
+function depthFromJmaCoordinate(coordinate?: string): number | null {
+    if (!coordinate) return null
+
+    const match = coordinate.match(/[+-]\d+(?:\.\d+)?[+-]\d+(?:\.\d+)?([+-]\d+)\/?/)
+    if (!match) return null
+
+    const meters = Math.abs(Number(match[1]))
+    if (!Number.isFinite(meters)) return null
+
+    return Math.round(meters / 1000)
+}
+
+function formatJmaDepth(depth: number | string | undefined, coordinate?: string): string {
+    const coordinateDepth = depthFromJmaCoordinate(coordinate)
+    if (coordinateDepth !== null) return coordinateDepth === 0 ? 'ごく浅い' : `${coordinateDepth}km`
+
+    return formatDepth(depth)
+}
+
+function formatJstTime(time?: string): string {
+    if (!time) return '不明'
+
+    const normalized = time.includes('T')
+        ? time
+        : time.replace(/\//g, '-').replace(' ', 'T')
+    const dateSource = /(?:Z|[+-]\d{2}:?\d{2})$/.test(normalized)
+        ? normalized
+        : `${normalized}+09:00`
+    const date = new Date(dateSource)
+    if (Number.isNaN(date.getTime())) return time
+
+    const parts = new Intl.DateTimeFormat('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    }).formatToParts(date)
+    const value = (type: string) => parts.find(part => part.type === type)?.value ?? ''
+
+    return `${value('year')}年${value('month')}月${value('day')}日 ${value('hour')}:${value('minute')}`
+}
+
 function localScaleImage(scale: number | string | undefined): AttachmentBuilder | null {
     const value = typeof scale === 'string' ? Number(scale) : scale
     const fileNameByScale: Record<number, string> = {
@@ -197,10 +242,10 @@ async function buildJmaEmbed(detail: JmaQuakeDetail): Promise<{ embeds: EmbedBui
         .addFields(
             { name: '震源', value: hypocenter?.Name ?? '不明', inline: true },
             { name: '規模', value: earthquake?.Magnitude ? `M${earthquake.Magnitude}` : '不明', inline: true },
-            { name: '深さ', value: formatDepth(hypocenter?.Depth), inline: true },
+            { name: '深さ', value: formatJmaDepth(hypocenter?.Depth, hypocenter?.Coordinate), inline: true },
             { name: '最大震度', value: scaleToString(maxScale), inline: true },
-            { name: '発生時刻', value: earthquake?.OriginTime ?? earthquake?.ArrivalTime ?? '不明', inline: true },
-            { name: '発表時刻', value: detail.Head?.ReportDateTime ?? '不明', inline: true },
+            { name: '発生時刻', value: formatJstTime(earthquake?.OriginTime ?? earthquake?.ArrivalTime), inline: true },
+            { name: '発表時刻', value: formatJstTime(detail.Head?.ReportDateTime), inline: true },
         )
         .setFooter({ text: 'Source: 気象庁' })
 

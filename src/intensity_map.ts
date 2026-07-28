@@ -195,24 +195,27 @@ function zoomFromMagnitude(magnitude?: string): number {
 }
 
 function zoomFromSpread(epicenter: Coordinate, points: Coordinate[]): number {
-    const maxDelta = points.reduce((currentMax, point) => {
-        const latDelta = Math.abs(point.latitude - epicenter.latitude)
-        const lonDelta = Math.abs(point.longitude - epicenter.longitude)
-        return Math.max(currentMax, latDelta, lonDelta)
-    }, 0)
+    const margin = 26
 
-    if (maxDelta > 8) return 4
-    if (maxDelta > 4) return 5
-    if (maxDelta > 2) return 6
-    if (maxDelta > 1) return 7
-    if (maxDelta > 0.5) return 8
-    return 9
+    for (let zoom = 10; zoom >= 4; zoom -= 1) {
+        const center = project(epicenter, zoom)
+        const fits = points.every(point => {
+            const projected = project(point, zoom)
+            return (
+                Math.abs(projected.x - center.x) <= MAP_WIDTH / 2 - margin &&
+                Math.abs(projected.y - center.y) <= MAP_HEIGHT / 2 - margin
+            )
+        })
+
+        if (fits) return zoom
+    }
+
+    return 4
 }
 
 function calculateZoom(detail: IntensityMapDetail, epicenter: Coordinate, points: Coordinate[]): number {
-    const magnitudeZoom = zoomFromMagnitude(detail.Body?.Earthquake?.Magnitude)
     const spreadZoom = zoomFromSpread(epicenter, points)
-    return Math.max(4, Math.min(10, Math.min(magnitudeZoom, spreadZoom)))
+    return Math.max(4, Math.min(10, spreadZoom))
 }
 
 function collectStations(detail: IntensityMapDetail): (IntensityStation & { coordinate: Coordinate })[] {
@@ -231,8 +234,7 @@ function collectStations(detail: IntensityMapDetail): (IntensityStation & { coor
                 longitude: station.latlon.lon,
             },
         }))
-        .sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int))
-        .slice(0, 120) ?? []
+        .sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int)) ?? []
 }
 
 async function fetchTile(zoom: number, x: number, y: number): Promise<Buffer | null> {
