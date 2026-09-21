@@ -1,5 +1,11 @@
 node_modules
 .git
+Discord_Bot.git
 .env
 data
+build
+sample-output
+tests
+.work-*
+audit-results.json
 npm-debug.log

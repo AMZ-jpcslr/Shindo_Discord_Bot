@@ -1,13 +1,4 @@
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.data = void 0;
 exports.execute = execute;
@@ -48,27 +39,29 @@ exports.data = new discord_js_1.SlashCommandBuilder()
     .setDescription('この震度以上の地震だけ通知します')
     .setRequired(true)
     .addChoices(...choices));
-function execute(interaction) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const guildId = interaction.guildId;
-        if (!guildId) {
-            yield interaction.reply({ content: 'このコマンドはサーバー内でのみ使用できます。', ephemeral: true });
-            return;
-        }
-        const value = interaction.options.getString('threshold', true);
-        const thresholds = (0, eq_notify_1.loadEqThresholds)();
-        if (value === 'all') {
-            delete thresholds[guildId];
-            (0, eq_notify_1.saveEqThresholds)(thresholds);
-            yield interaction.reply({ content: '地震通知の震度フィルターを解除しました。全て通知します。', ephemeral: true });
-            return;
-        }
-        const threshold = (0, eq_notify_1.scaleRank)(value);
-        thresholds[guildId] = threshold;
+async function execute(interaction) {
+    if (!interaction.memberPermissions?.has(discord_js_1.PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: '設定変更には「サーバー管理」権限が必要です。', ephemeral: true });
+        return;
+    }
+    const guildId = interaction.guildId;
+    if (!guildId) {
+        await interaction.reply({ content: 'このコマンドはサーバー内でのみ使用できます。', ephemeral: true });
+        return;
+    }
+    const value = interaction.options.getString('threshold', true);
+    const thresholds = (0, eq_notify_1.loadEqThresholds)();
+    if (value === 'all') {
+        delete thresholds[guildId];
         (0, eq_notify_1.saveEqThresholds)(thresholds);
-        yield interaction.reply({
-            content: `地震通知を「${thresholdLabel(threshold)}」に設定しました。`,
-            ephemeral: true,
-        });
+        await interaction.reply({ content: '地震通知の震度フィルターを解除しました。全て通知します。', ephemeral: true });
+        return;
+    }
+    const threshold = (0, eq_notify_1.scaleRank)(value);
+    thresholds[guildId] = threshold;
+    (0, eq_notify_1.saveEqThresholds)(thresholds);
+    await interaction.reply({
+        content: `地震通知を「${thresholdLabel(threshold)}」に設定しました。`,
+        ephemeral: true,
     });
 }

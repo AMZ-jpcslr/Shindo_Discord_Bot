@@ -1,18 +1,10 @@
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createIntensityMapAttachment = createIntensityMapAttachment;
+const http_1 = require("./http");
 const discord_js_1 = require("discord.js");
 const sharp_1 = __importDefault(require("sharp"));
 const TILE_SIZE = 256;
@@ -138,22 +130,6 @@ function buildLegendSvg() {
         </g>
     `;
 }
-function zoomFromMagnitude(magnitude) {
-    const value = Number(magnitude);
-    if (!Number.isFinite(value))
-        return 7;
-    if (value >= 8)
-        return 4;
-    if (value >= 7)
-        return 5;
-    if (value >= 6)
-        return 6;
-    if (value >= 5)
-        return 7;
-    if (value >= 4)
-        return 8;
-    return 9;
-}
 function zoomFromSpread(epicenter, points) {
     const margin = 26;
     for (let zoom = 10; zoom >= 4; zoom -= 1) {
@@ -173,31 +149,34 @@ function calculateZoom(detail, epicenter, points) {
     return Math.max(4, Math.min(10, spreadZoom));
 }
 function collectStations(detail) {
-    var _a, _b, _c, _d, _e;
-    return (_e = (_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Intensity) === null || _b === void 0 ? void 0 : _b.Observation) === null || _c === void 0 ? void 0 : _c.Pref) === null || _d === void 0 ? void 0 : _d.flatMap(pref => { var _a; return (_a = pref.Area) !== null && _a !== void 0 ? _a : []; }).flatMap(area => { var _a; return (_a = area.City) !== null && _a !== void 0 ? _a : []; }).flatMap(city => { var _a; return (_a = city.IntensityStation) !== null && _a !== void 0 ? _a : []; }).filter((station) => {
-        var _a, _b;
-        return typeof ((_a = station.latlon) === null || _a === void 0 ? void 0 : _a.lat) === 'number' &&
-            typeof ((_b = station.latlon) === null || _b === void 0 ? void 0 : _b.lon) === 'number';
-    }).map(station => (Object.assign(Object.assign({}, station), { coordinate: {
+    return detail.Body?.Intensity?.Observation?.Pref
+        ?.flatMap(pref => pref.Area ?? [])
+        .flatMap(area => area.City ?? [])
+        .flatMap(city => city.IntensityStation ?? [])
+        .filter((station) => typeof station.latlon?.lat === 'number' &&
+        typeof station.latlon?.lon === 'number')
+        .map(station => ({
+        ...station,
+        coordinate: {
             latitude: station.latlon.lat,
             longitude: station.latlon.lon,
-        } }))).sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int))) !== null && _e !== void 0 ? _e : [];
+        },
+    }))
+        .sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int)) ?? [];
 }
-function fetchTile(zoom, x, y) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const maxTile = 2 ** zoom;
-        if (x < 0 || y < 0 || x >= maxTile || y >= maxTile)
-            return null;
-        const response = yield fetch(`https://a.basemaps.cartocdn.com/dark_nolabels/${zoom}/${x}/${y}.png`);
-        if (!response.ok)
-            return null;
-        const source = Buffer.from(yield response.arrayBuffer());
-        return (0, sharp_1.default)(source)
-            .removeAlpha()
-            .modulate({ brightness: 0.85, saturation: 0.35 })
-            .png()
-            .toBuffer();
-    });
+async function fetchTile(zoom, x, y) {
+    const maxTile = 2 ** zoom;
+    if (x < 0 || y < 0 || x >= maxTile || y >= maxTile)
+        return null;
+    const response = await (0, http_1.fetchWithTimeout)(`https://a.basemaps.cartocdn.com/dark_nolabels/${zoom}/${x}/${y}.png`);
+    if (!response.ok)
+        return null;
+    const source = Buffer.from(await response.arrayBuffer());
+    return (0, sharp_1.default)(source)
+        .removeAlpha()
+        .modulate({ brightness: 0.85, saturation: 0.35 })
+        .png()
+        .toBuffer();
 }
 function buildOverlaySvg(detail, epicenter, stations, zoom) {
     const center = project(epicenter, zoom);
@@ -241,51 +220,48 @@ function buildOverlaySvg(detail, epicenter, stations, zoom) {
     `;
     return Buffer.from(svg);
 }
-function createIntensityMapAttachment(detail_1) {
-    return __awaiter(this, arguments, void 0, function* (detail, name = 'intensity-map.png') {
-        var _a, _b, _c, _d;
-        const epicenter = parseJmaCoordinate((_d = (_c = (_b = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake) === null || _b === void 0 ? void 0 : _b.Hypocenter) === null || _c === void 0 ? void 0 : _c.Area) === null || _d === void 0 ? void 0 : _d.Coordinate);
-        if (!epicenter)
-            return null;
-        const stations = collectStations(detail);
-        const stationPoints = stations.map(station => station.coordinate);
-        const zoom = calculateZoom(detail, epicenter, stationPoints);
-        const center = project(epicenter, zoom);
-        const left = center.x - MAP_WIDTH / 2;
-        const top = center.y - MAP_HEIGHT / 2;
-        const minTileX = Math.floor(left / TILE_SIZE);
-        const maxTileX = Math.floor((left + MAP_WIDTH) / TILE_SIZE);
-        const minTileY = Math.floor(top / TILE_SIZE);
-        const maxTileY = Math.floor((top + MAP_HEIGHT) / TILE_SIZE);
-        const composites = [];
-        for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
-            for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
-                const tile = yield fetchTile(zoom, tileX, tileY);
-                if (!tile)
-                    continue;
-                composites.push({
-                    input: tile,
-                    left: Math.round(tileX * TILE_SIZE - left),
-                    top: Math.round(tileY * TILE_SIZE - top),
-                });
-            }
+async function createIntensityMapAttachment(detail, name = 'intensity-map.png') {
+    const epicenter = parseJmaCoordinate(detail.Body?.Earthquake?.Hypocenter?.Area?.Coordinate);
+    if (!epicenter)
+        return null;
+    const stations = collectStations(detail);
+    const stationPoints = stations.map(station => station.coordinate);
+    const zoom = calculateZoom(detail, epicenter, stationPoints);
+    const center = project(epicenter, zoom);
+    const left = center.x - MAP_WIDTH / 2;
+    const top = center.y - MAP_HEIGHT / 2;
+    const minTileX = Math.floor(left / TILE_SIZE);
+    const maxTileX = Math.floor((left + MAP_WIDTH) / TILE_SIZE);
+    const minTileY = Math.floor(top / TILE_SIZE);
+    const maxTileY = Math.floor((top + MAP_HEIGHT) / TILE_SIZE);
+    const composites = [];
+    for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
+        for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
+            const tile = await fetchTile(zoom, tileX, tileY);
+            if (!tile)
+                continue;
+            composites.push({
+                input: tile,
+                left: Math.round(tileX * TILE_SIZE - left),
+                top: Math.round(tileY * TILE_SIZE - top),
+            });
         }
-        composites.push({
-            input: buildOverlaySvg(detail, epicenter, stations, zoom),
-            left: 0,
-            top: 0,
-        });
-        const image = yield (0, sharp_1.default)({
-            create: {
-                width: MAP_WIDTH,
-                height: MAP_HEIGHT,
-                channels: 4,
-                background: '#101612',
-            },
-        })
-            .composite(composites)
-            .png()
-            .toBuffer();
-        return new discord_js_1.AttachmentBuilder(image, { name });
+    }
+    composites.push({
+        input: buildOverlaySvg(detail, epicenter, stations, zoom),
+        left: 0,
+        top: 0,
     });
+    const image = await (0, sharp_1.default)({
+        create: {
+            width: MAP_WIDTH,
+            height: MAP_HEIGHT,
+            channels: 4,
+            background: '#101612',
+        },
+    })
+        .composite(composites)
+        .png()
+        .toBuffer();
+    return new discord_js_1.AttachmentBuilder(image, { name });
 }

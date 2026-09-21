@@ -1,46 +1,83 @@
 # Shindo Discord Bot
 
-Discordで緊急地震速報と地震情報を通知するBOTです。
+Discordで地震・津波、地域別の気象警報・河川氾濫情報、降水予報と雨雲レーダーを確認できるBotです。Node.js 22.12以上を使用します。
 
-## Railwayで使う環境変数
+## Discordでの使い方
 
-Railwayのプロジェクト画面で `Variables` を開き、次の値を追加してください。
+まず `/help` を開いてください。通知先を変更できるのは「サーバー管理」権限のあるメンバーです。各コマンドの返答は実行した本人だけに表示され、自動通知は設定チャンネルに届きます。
 
-```env
-TOKEN=Discord Bot Token
-CLIENT_ID=Discord Application ID
-GUILD_ID=Discord Server ID
+| コマンド | 用途 |
+| --- | --- |
+| `/set_eq_channel channel:#地震速報` | 地震・津波の通知先を設定 |
+| `/set_eq_threshold threshold:震度3以上` | 地震の最低震度。津波・緊急地震速報の取消は除外 |
+| `/weather set area:東京都 千代田区 channel:#天気` | 市区町村を選び気象・降水通知を登録 |
+| `/weather now area:東京都 千代田区` | 発表中の気象警報・注意報と河川氾濫情報 |
+| `/weather radar area:東京都 千代田区` | 雨雲レーダー画像と動画・凡例へのリンク |
+| `/weather status` | 登録地域・通知先・最終成功時刻・エラーの確認 |
+| `/weather remove area:東京都 千代田区` | その地域の通知を停止 |
+| `/get_eq` | 直近の地震情報 |
+| `/ping` | Discordへの接続状況 |
+
+`area` は市区町村名を入力し、候補から選択します。同名の地域は都道府県名を確認してください。1サーバーにつき最大10地域です。閲覧用の `radar`・`now` は未登録地域でも使えます。地域中央付近の座標を使うため、広い市町村・離島などは実際の所在地との差に注意してください。
+
+`/weather set` のオプション:
+
+- `warnings`: 気象警報・河川氾濫情報の通知。既定ON。
+- `advisories`: 注意報も含める。既定OFF。`warnings` がONの場合に有効。
+- `rain`: 今後3時間の降水予報を通知。既定ON。
+- `threshold`: 1時間あたりの降水量の基準。既定1 mm、0.1～100 mm。
+
+再設定では、省略したオプションは既定値に戻ります。通知先にはBotの「チャンネルを見る」「メッセージを送信」「埋め込みリンク」権限が必要です。地震の画像添付と雨雲レーダーには「ファイルを添付」も必要です。
+
+## データと通知の動作
+
+- 地震・津波: 気象庁とP2P地震情報。緊急地震速報はWebSocket、気象庁の地震・津波は処理完了後約60秒間隔。複数の情報源による同じ地震の通知はあり得ます。
+- 気象警報: 気象庁の2026年更新後の `warning/data/r8` を使用。大雨、土砂災害、高潮、暴風、暴風雪、大雪、波浪、各種注意報に対応。河川氾濫情報は `flood/data/r8/flood_xml.json` を使用し、対象市区町村で絞ります。
+- 警報は約1分ごとに確認し、発表中の種類が変化したときと解除時に通知。初回は発表中の対象警報がある場合だけ通知します。同じ警報の継続・本文だけの更新では通知しません。河川指定のない地域・河川の情報はこのフィードでは扱いません。
+- 降水: [Open-Meteo](https://open-meteo.com/en/docs) の時間別予報を約15分ごとに確認。今後3時間に基準以上となる最初の時間枠を通知します。時刻は「その時刻までの1時間」の降水量です。雨・雪を含む予報であり、観測値や正確な降り始めの通知ではありません。同じ時間枠は重複通知せず、再通知は3時間以上空けます。
+- 雨雲: 気象庁の最新実況タイルと地理院タイルを重ねた画像です。30分より古い時刻・タイル取得失敗は画像を表示せず、気象庁へのリンクを案内します。白丸は地域中央付近です。
+- 気象の取得・送信失敗は次の巡回で再試行。取得失敗を「警報なし」「雨なし」として扱いません。成功状態はファイルに保存され、再起動後も重複抑止を維持します。Discord送信直後・保存直前にプロセスが停止すると重複する可能性があります。
+- 災害情報は配信元・回線・Discordに依存します。自治体や気象庁の情報も確認してください。
+
+Open-Meteoの無料APIは非商用利用向けです。商用運用や大規模利用時は提供元の利用条件・上限を確認してください。出典は各通知に表示します。
+
+## Railwayへの反映
+
+この作業はローカルの実装・検証までです。Discordへのテスト送信やRailway本番へのデプロイは行っていません。
+
+1. 変更したソースと `package-lock.json` をRailwayが参照するリポジトリへ反映します。
+2. Railwayに **Volumeを追加し `/data` にマウント**、変数 `DATA_DIR=/data` を設定してください。**レプリカは1台**で運用します。JSONファイル保存のため複数プロセスでの共有書き込みには対応していません。
+3. Variablesに `TOKEN`（Bot Token）、`CLIENT_ID`（Application ID）、必要に応じ `GUILD_ID` またはカンマ区切りの `GUILD_IDS` を設定します。トークンをGitへ保存しないでください。
+4. `Dockerfile` で `npm ci` → TypeScriptビルド → 本番依存関係のみ残す、の順にビルドします。`railway.json` もDockerfile方式に統一しています。
+5. 起動時にスラッシュコマンドを登録してからBotを起動します。グローバル登録に加え、指定されたサーバー（未指定時は参加中のサーバー）にも登録する現在の動作を維持しています。登録権限エラーはRailwayログを確認してください。
+6. Discordで `/help`、`/weather set`、`/weather status` を確認します。
+
+保存先には `eq_channels.json`、`eq_thresholds.json`、`latest_eq_ids.json`、`eq-deliveries.json`、`weather.json`、`weather-state.json` が作成されます。Volumeがないと再デプロイで設定が失われます。旧版はプロジェクトの1階層上の `data`（Dockerでは `/data`）に保存していました。既存の設定ファイルがある場合は、新しいVolumeへ移してから起動してください。旧版の全国一括洪水通知は廃止し、`/weather set` による地域別の警報・河川氾濫通知に置き換えています。
+
+## ローカル開発と検証
+
+`.env.example` を `.env` にコピーして設定します。`DATA_DIR` 未設定時はプロジェクト内の `data/` に保存します。
+
+```sh
+npm ci
+npm test
+npm run lint
+npm run deploy-commands
+npm start
 ```
 
-`TOKEN` はDiscord Developer PortalのBot Tokenです。
-`CLIENT_ID` はDiscord Developer PortalのApplication IDです。
-`GUILD_ID` はBOTを使うDiscordサーバーのIDです。
+`npm test` はビルドとオフライン回帰テストを実行し、Discordに接続しません。公開APIの読み取り接続確認は以下です。実際の雨雲画像は `sample-output/weather-radar.png` に保存します。
 
-## スラッシュコマンドを即時反映する方法
-
-Discordのグローバルコマンドは反映まで時間がかかることがあります。
-このBOTでは `GUILD_ID` を設定している場合、スラッシュコマンドをそのサーバー専用のギルドコマンドとして登録します。
-
-ギルドコマンドは通常すぐ反映されるため、RailwayのVariablesに `GUILD_ID` を入れておくのがおすすめです。
-
-複数サーバーで同じコマンドを使いたい場合は、`GUILD_ID` を外すとグローバルコマンドとして登録されます。ただし反映には時間がかかる場合があります。
-
-## Railwayでの起動
-
-Railwayでは `Dockerfile` を使って次の流れで動きます。
-
-1. `npm run compile` でTypeScriptを `build/` に出力
-2. `node build/deploy-commands.js` でスラッシュコマンドをDiscordへ登録
-3. `npm start` でBOTを起動
-
-## ローカルでの起動
-
-`.env.example` を参考に `.env` を作成してください。
-
-```powershell
-npm.cmd run deploy-commands
-npm.cmd run compile
-npm.cmd start
+```sh
+npm run compile
+node scripts/smoke.cjs
+npm audit
 ```
 
-通知先はDiscord上で `/set_eq_channel` を実行して設定します。
+## 今回の検証
+
+- TypeScriptビルド、ESLint、28件の自動テストが成功（Node.js 22・24で確認）。
+- 警報の発表・継続・解除・危険警報への切替、地域外除外、河川氾濫、欠損データ、重複通知、送信失敗からの再試行、監視中の削除、再設定、権限不足を検証。
+- 地震通知の宛先別再試行、並行保存、緊急地震速報取消時の震度フィルター除外、地図タイルの画像合成を検証。
+- 気象庁の1,805地域・現行警報・雨雲画像とOpen-Meteo予報を実際に取得し、雨雲画像の見た目を確認。
+- `npm audit`: 0件（検証時点）。Discord上での実送信・RailwayのVolume永続性は本番環境での確認が必要です。

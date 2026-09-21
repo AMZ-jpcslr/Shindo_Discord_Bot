@@ -8,7 +8,7 @@ import { loadEqChannels, saveEqChannels } from '../eq_notify'
 
 export const data = new SlashCommandBuilder()
     .setName('set_eq_channel')
-    .setDescription('緊急地震速報と地震情報の通知チャンネルを設定します')
+    .setDescription('地震・津波情報の通知チャンネルを設定します')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addChannelOption(option =>
         option
@@ -19,6 +19,10 @@ export const data = new SlashCommandBuilder()
     )
 
 export async function execute(interaction: ChatInputCommandInteraction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: '設定変更には「サーバー管理」権限が必要です。', ephemeral: true })
+        return
+    }
     const guildId = interaction.guildId
     const channel = interaction.options.getChannel('channel', true)
 
@@ -27,12 +31,18 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         return
     }
 
+    await interaction.deferReply({ ephemeral: true })
+    const target = await interaction.guild!.channels.fetch(channel.id)
+    const me = interaction.guild!.members.me || await interaction.guild!.members.fetchMe()
+    if (!target?.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.AttachFiles])) {
+        await interaction.editReply('Botに「チャンネルを見る」「メッセージを送信」「埋め込みリンク」「ファイルを添付」権限が必要です。')
+        return
+    }
     const channels = loadEqChannels()
     channels[guildId] = channel.id
     saveEqChannels(channels)
 
-    await interaction.reply({
-        content: `緊急地震速報と地震情報の通知先を <#${channel.id}> に設定しました。`,
-        ephemeral: true,
+    await interaction.editReply({
+        content: `地震・津波情報の通知先を <#${channel.id}> に設定しました。`,
     })
 }

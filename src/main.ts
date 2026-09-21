@@ -1,3 +1,7 @@
+import * as weatherCommand from './commands/weather'
+import * as helpCommand from './commands/help'
+import { startWeatherNotify } from './weather_notify'
+import { getRegions } from './weather'
 import { Client, GatewayIntentBits } from 'discord.js'
 import dotenv from 'dotenv'
 import * as getEqCommand from './commands/get_eq'
@@ -25,7 +29,7 @@ const client = new Client({
 
 function setBotPresence() {
     client.user?.setPresence({
-        activities: [{ name: '緊急地震速報を監視中', type: 3 }],
+        activities: [{ name: '地震・津波・気象情報 | /help', type: 3 }],
         status: 'online',
     })
 }
@@ -35,6 +39,8 @@ client.once('ready', () => {
     console.log(client.user?.tag)
     setBotPresence()
     startEqAutoNotify(client)
+    startWeatherNotify(client)
+    getRegions().catch(error => console.error('地域候補の準備に失敗:', error))
 
     setInterval(() => {
         console.log(`Bot稼働中: ping=${client.ws.ping}ms / guilds=${client.guilds.cache.size}`)
@@ -46,10 +52,20 @@ client.on('shardResume', () => {
 })
 
 client.on('interactionCreate', async (interaction) => {
+    if (interaction.isAutocomplete() && interaction.commandName === 'weather') {
+        await weatherCommand.autocomplete(interaction)
+        return
+    }
     if (!interaction.isChatInputCommand()) return
 
     try {
         switch (interaction.commandName) {
+            case 'weather':
+                await weatherCommand.execute(interaction)
+                break
+            case 'help':
+                await helpCommand.execute(interaction)
+                break
             case 'ping':
                 await pingCommand.execute(interaction)
                 break
@@ -71,7 +87,7 @@ client.on('interactionCreate', async (interaction) => {
         }
     } catch (error) {
         console.error('コマンド実行エラー:', error)
-        const message = 'コマンドの実行中にエラーが発生しました。'
+        const message = '情報の取得・設定に失敗しました。少し待って再実行してください。通知設定は /weather status、使い方は /help で確認できます。'
 
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply(message).catch(() => undefined)
@@ -81,4 +97,5 @@ client.on('interactionCreate', async (interaction) => {
     }
 })
 
-client.login(token)
+client.on('error', error => console.error('Discord接続エラー:', error))
+client.login(token).catch(error => { console.error('Discord接続失敗:', error); process.exitCode = 1 })

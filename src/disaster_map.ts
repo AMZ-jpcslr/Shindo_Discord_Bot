@@ -1,9 +1,12 @@
+import { fetchWithTimeout as fetch } from './http'
 import { AttachmentBuilder } from 'discord.js'
 import sharp, { type OverlayOptions } from 'sharp'
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const topojson = require('topojson-client') as {
     feature: (topology: TopologyLike, object: unknown) => GeoFeatureCollectionLike
 }
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const landTopology = require('world-atlas/land-10m.json') as TopologyLike
 
 export type DisasterMapPoint = {
@@ -360,24 +363,6 @@ function boundsForTsunamiAreaName(name: string): Bounds | null {
         minLongitude: point.longitude - 0.9,
         maxLongitude: point.longitude + 0.9,
     }
-}
-
-function seedLinesForTsunamiAreaName(name: string): Coordinate[][] {
-    const detailed = Object.entries(DETAILED_TSUNAMI_COAST_LINES)
-        .find(([key]) => name.includes(key) || key.includes(name))
-    if (detailed) return detailed[1]
-
-    const simple = Object.entries(TSUNAMI_COAST_LINES)
-        .find(([key]) => name.includes(key) || key.includes(name))
-    if (simple) return [simple[1]]
-
-    const point = pointForAreaName(name)
-    if (!point) return []
-
-    return [[
-        { latitude: point.latitude - 0.2, longitude: point.longitude - 0.25 },
-        { latitude: point.latitude + 0.2, longitude: point.longitude + 0.25 },
-    ]]
 }
 
 function normalizeLineCoordinates(coordinates: unknown): Coordinate[][] {

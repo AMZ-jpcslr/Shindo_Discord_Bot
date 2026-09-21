@@ -1,13 +1,4 @@
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -16,9 +7,12 @@ exports.PREFECTURE_POINTS = void 0;
 exports.pointForAreaName = pointForAreaName;
 exports.linesForTsunamiAreaName = linesForTsunamiAreaName;
 exports.createDisasterMapAttachment = createDisasterMapAttachment;
+const http_1 = require("./http");
 const discord_js_1 = require("discord.js");
 const sharp_1 = __importDefault(require("sharp"));
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const topojson = require('topojson-client');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const landTopology = require('world-atlas/land-10m.json');
 const TILE_SIZE = 256;
 const MAP_WIDTH = 600;
@@ -318,23 +312,6 @@ function boundsForTsunamiAreaName(name) {
         maxLongitude: point.longitude + 0.9,
     };
 }
-function seedLinesForTsunamiAreaName(name) {
-    const detailed = Object.entries(DETAILED_TSUNAMI_COAST_LINES)
-        .find(([key]) => name.includes(key) || key.includes(name));
-    if (detailed)
-        return detailed[1];
-    const simple = Object.entries(TSUNAMI_COAST_LINES)
-        .find(([key]) => name.includes(key) || key.includes(name));
-    if (simple)
-        return [simple[1]];
-    const point = pointForAreaName(name);
-    if (!point)
-        return [];
-    return [[
-            { latitude: point.latitude - 0.2, longitude: point.longitude - 0.25 },
-            { latitude: point.latitude + 0.2, longitude: point.longitude + 0.25 },
-        ]];
-}
 function normalizeLineCoordinates(coordinates) {
     if (!Array.isArray(coordinates))
         return [];
@@ -347,28 +324,25 @@ function normalizeLineCoordinates(coordinates) {
     return coordinates.flatMap(child => normalizeLineCoordinates(child));
 }
 function worldCoastlineRings() {
-    var _a;
     if (cachedWorldCoastlineRings)
         return cachedWorldCoastlineRings;
     const land = topojson.feature(landTopology, landTopology.objects.land);
-    cachedWorldCoastlineRings = ((_a = land.features) !== null && _a !== void 0 ? _a : [])
-        .flatMap(feature => { var _a; return normalizeLineCoordinates((_a = feature.geometry) === null || _a === void 0 ? void 0 : _a.coordinates); });
+    cachedWorldCoastlineRings = (land.features ?? [])
+        .flatMap(feature => normalizeLineCoordinates(feature.geometry?.coordinates));
     return cachedWorldCoastlineRings;
 }
-function fetchGsiCoastlineLines(bounds, color) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const paddedBounds = padBounds(bounds, 0.08);
-        const lines = [];
-        for (const coordinates of worldCoastlineRings()) {
-            for (const segment of coastlineSegmentsFromLine(coordinates, paddedBounds)) {
-                lines.push({
-                    coordinates: segment,
-                    color,
-                });
-            }
+async function fetchGsiCoastlineLines(bounds, color) {
+    const paddedBounds = padBounds(bounds, 0.08);
+    const lines = [];
+    for (const coordinates of worldCoastlineRings()) {
+        for (const segment of coastlineSegmentsFromLine(coordinates, paddedBounds)) {
+            lines.push({
+                coordinates: segment,
+                color,
+            });
         }
-        return lines;
-    });
+    }
+    return lines;
 }
 function collectCoordinates(points, lines) {
     return [
@@ -405,21 +379,19 @@ function calculateZoom(points, lines = []) {
         return 7;
     return 8;
 }
-function fetchTile(zoom, x, y) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const maxTile = 2 ** zoom;
-        if (x < 0 || y < 0 || x >= maxTile || y >= maxTile)
-            return null;
-        const response = yield fetch(`https://a.basemaps.cartocdn.com/dark_nolabels/${zoom}/${x}/${y}.png`);
-        if (!response.ok)
-            return null;
-        const source = Buffer.from(yield response.arrayBuffer());
-        return (0, sharp_1.default)(source)
-            .removeAlpha()
-            .modulate({ brightness: 0.85, saturation: 0.35 })
-            .png()
-            .toBuffer();
-    });
+async function fetchTile(zoom, x, y) {
+    const maxTile = 2 ** zoom;
+    if (x < 0 || y < 0 || x >= maxTile || y >= maxTile)
+        return null;
+    const response = await (0, http_1.fetchWithTimeout)(`https://a.basemaps.cartocdn.com/dark_nolabels/${zoom}/${x}/${y}.png`);
+    if (!response.ok)
+        return null;
+    const source = Buffer.from(await response.arrayBuffer());
+    return (0, sharp_1.default)(source)
+        .removeAlpha()
+        .modulate({ brightness: 0.85, saturation: 0.35 })
+        .png()
+        .toBuffer();
 }
 function buildOverlaySvg(points, lines, center, zoom) {
     const centerPoint = project(center, zoom);
@@ -457,16 +429,13 @@ function buildOverlaySvg(points, lines, center, zoom) {
         const projected = project(point, zoom);
         const x = projected.x - left;
         const y = projected.y - top;
-        const escapedLabel = point.label.replace(/[&<>"']/g, char => {
-            var _a;
-            return ((_a = {
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&apos;',
-            }[char]) !== null && _a !== void 0 ? _a : char);
-        });
+        const escapedLabel = point.label.replace(/[&<>"']/g, char => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&apos;',
+        }[char] ?? char));
         return `
             <g transform="translate(${x}, ${y})">
                 <circle cx="0" cy="0" r="8" fill="${point.color}" stroke="#101418" stroke-width="2"/>
@@ -493,56 +462,52 @@ function pointForAreaName(name) {
         return special[1];
     return null;
 }
-function linesForTsunamiAreaName(name, color) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const bounds = boundsForTsunamiAreaName(name);
-        if (!bounds)
-            return [];
-        return fetchGsiCoastlineLines(bounds, color);
-    });
+async function linesForTsunamiAreaName(name, color) {
+    const bounds = boundsForTsunamiAreaName(name);
+    if (!bounds)
+        return [];
+    return fetchGsiCoastlineLines(bounds, color);
 }
-function createDisasterMapAttachment(points_1) {
-    return __awaiter(this, arguments, void 0, function* (points, name = 'disaster-map.png', lines = []) {
-        if (!points.length && !lines.length)
-            return null;
-        const zoom = calculateZoom(points, lines);
-        const center = centerOf(points, lines);
-        const projectedCenter = project(center, zoom);
-        const left = projectedCenter.x - MAP_WIDTH / 2;
-        const top = projectedCenter.y - MAP_HEIGHT / 2;
-        const minTileX = Math.floor(left / TILE_SIZE);
-        const maxTileX = Math.floor((left + MAP_WIDTH) / TILE_SIZE);
-        const minTileY = Math.floor(top / TILE_SIZE);
-        const maxTileY = Math.floor((top + MAP_HEIGHT) / TILE_SIZE);
-        const composites = [];
-        for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
-            for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
-                const tile = yield fetchTile(zoom, tileX, tileY);
-                if (!tile)
-                    continue;
-                composites.push({
-                    input: tile,
-                    left: Math.round(tileX * TILE_SIZE - left),
-                    top: Math.round(tileY * TILE_SIZE - top),
-                });
-            }
+async function createDisasterMapAttachment(points, name = 'disaster-map.png', lines = []) {
+    if (!points.length && !lines.length)
+        return null;
+    const zoom = calculateZoom(points, lines);
+    const center = centerOf(points, lines);
+    const projectedCenter = project(center, zoom);
+    const left = projectedCenter.x - MAP_WIDTH / 2;
+    const top = projectedCenter.y - MAP_HEIGHT / 2;
+    const minTileX = Math.floor(left / TILE_SIZE);
+    const maxTileX = Math.floor((left + MAP_WIDTH) / TILE_SIZE);
+    const minTileY = Math.floor(top / TILE_SIZE);
+    const maxTileY = Math.floor((top + MAP_HEIGHT) / TILE_SIZE);
+    const composites = [];
+    for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
+        for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
+            const tile = await fetchTile(zoom, tileX, tileY);
+            if (!tile)
+                continue;
+            composites.push({
+                input: tile,
+                left: Math.round(tileX * TILE_SIZE - left),
+                top: Math.round(tileY * TILE_SIZE - top),
+            });
         }
-        composites.push({
-            input: buildOverlaySvg(points, lines, center, zoom),
-            left: 0,
-            top: 0,
-        });
-        const image = yield (0, sharp_1.default)({
-            create: {
-                width: MAP_WIDTH,
-                height: MAP_HEIGHT,
-                channels: 4,
-                background: '#101612',
-            },
-        })
-            .composite(composites)
-            .png()
-            .toBuffer();
-        return new discord_js_1.AttachmentBuilder(image, { name });
+    }
+    composites.push({
+        input: buildOverlaySvg(points, lines, center, zoom),
+        left: 0,
+        top: 0,
     });
+    const image = await (0, sharp_1.default)({
+        create: {
+            width: MAP_WIDTH,
+            height: MAP_HEIGHT,
+            channels: 4,
+            background: '#101612',
+        },
+    })
+        .composite(composites)
+        .png()
+        .toBuffer();
+    return new discord_js_1.AttachmentBuilder(image, { name });
 }

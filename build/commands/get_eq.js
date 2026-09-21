@@ -1,19 +1,11 @@
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.data = void 0;
 exports.execute = execute;
+const http_1 = require("../http");
 const discord_js_1 = require("discord.js");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -87,7 +79,7 @@ function formatJstTime(time) {
         minute: '2-digit',
         hour12: false,
     }).formatToParts(date);
-    const value = (type) => { var _a, _b; return (_b = (_a = parts.find(part => part.type === type)) === null || _a === void 0 ? void 0 : _a.value) !== null && _b !== void 0 ? _b : ''; };
+    const value = (type) => parts.find(part => part.type === type)?.value ?? '';
     return `${value('year')}年${value('month')}月${value('day')}日 ${value('hour')}:${value('minute')}`;
 }
 function localScaleImage(scale) {
@@ -141,8 +133,7 @@ function jmaScaleToP2PScale(scale) {
     }
 }
 function reportTimeValue(item) {
-    var _a, _b;
-    const source = (_b = (_a = item.ctt) !== null && _a !== void 0 ? _a : item.at) !== null && _b !== void 0 ? _b : '';
+    const source = item.ctt ?? item.at ?? '';
     if (/^\d{14}$/.test(source)) {
         return Number(source);
     }
@@ -158,9 +149,8 @@ function pickBestDetailItemForEvent(list, eventId) {
     const candidates = list.filter(item => isValidJmaJsonPath(item.json) &&
         (!eventId || item.eid === eventId));
     return candidates.sort((a, b) => {
-        var _a, _b;
-        const aHasIntensityDetail = ((_a = a.json) === null || _a === void 0 ? void 0 : _a.includes('VXSE5k')) ? 1 : 0;
-        const bHasIntensityDetail = ((_b = b.json) === null || _b === void 0 ? void 0 : _b.includes('VXSE5k')) ? 1 : 0;
+        const aHasIntensityDetail = a.json?.includes('VXSE5k') ? 1 : 0;
+        const bHasIntensityDetail = b.json?.includes('VXSE5k') ? 1 : 0;
         if (aHasIntensityDetail !== bHasIntensityDetail)
             return bHasIntensityDetail - aHasIntensityDetail;
         if (a.maxi && !b.maxi)
@@ -170,66 +160,59 @@ function pickBestDetailItemForEvent(list, eventId) {
         return reportTimeValue(b) - reportTimeValue(a);
     })[0];
 }
-function fetchJmaDetail(jsonPath) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const response = yield fetch(`https://www.jma.go.jp/bosai/quake/data/${jsonPath}`);
-        if (!response.ok)
-            throw new Error(`JMA detail fetch failed: ${response.status}`);
-        return response.json();
-    });
+async function fetchJmaDetail(jsonPath) {
+    const response = await (0, http_1.fetchWithTimeout)(`https://www.jma.go.jp/bosai/quake/data/${jsonPath}`);
+    if (!response.ok)
+        throw new Error(`JMA detail fetch failed: ${response.status}`);
+    return response.json();
 }
-function buildJmaEmbed(detail) {
-    return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
-        const earthquake = (_a = detail.Body) === null || _a === void 0 ? void 0 : _a.Earthquake;
-        const hypocenter = (_b = earthquake === null || earthquake === void 0 ? void 0 : earthquake.Hypocenter) === null || _b === void 0 ? void 0 : _b.Area;
-        const maxScale = (_e = (_d = (_c = detail.Body) === null || _c === void 0 ? void 0 : _c.Intensity) === null || _d === void 0 ? void 0 : _d.Observation) === null || _e === void 0 ? void 0 : _e.MaxInt;
-        const scaleImage = localScaleImage(jmaScaleToP2PScale(maxScale));
-        const coordinate = parseJmaCoordinate(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Coordinate);
-        const intensityMap = yield (0, intensity_map_1.createIntensityMapAttachment)(detail, 'intensity-map.png');
-        const embed = new discord_js_1.EmbedBuilder()
-            .setTitle((_g = (_f = detail.Head) === null || _f === void 0 ? void 0 : _f.Title) !== null && _g !== void 0 ? _g : '直近の地震情報')
-            .setColor(0x2d6cdf)
-            .setDescription(((_h = detail.Head) === null || _h === void 0 ? void 0 : _h.Text) || '気象庁から発表された直近の地震情報です。')
-            .addFields({ name: '震源', value: (_j = hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Name) !== null && _j !== void 0 ? _j : '不明', inline: true }, { name: '規模', value: (earthquake === null || earthquake === void 0 ? void 0 : earthquake.Magnitude) ? `M${earthquake.Magnitude}` : '不明', inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Depth, hypocenter === null || hypocenter === void 0 ? void 0 : hypocenter.Coordinate), inline: true }, { name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: '発生時刻', value: formatJstTime((_k = earthquake === null || earthquake === void 0 ? void 0 : earthquake.OriginTime) !== null && _k !== void 0 ? _k : earthquake === null || earthquake === void 0 ? void 0 : earthquake.ArrivalTime), inline: true }, { name: '発表時刻', value: formatJstTime((_l = detail.Head) === null || _l === void 0 ? void 0 : _l.ReportDateTime), inline: true })
-            .setFooter({ text: 'Source: 気象庁' });
-        if (intensityMap) {
-            embed.setImage('attachment://intensity-map.png');
-        }
-        if (coordinate) {
-            embed.addFields({
-                name: '地図',
-                value: `[震源付近を開く](https://www.google.com/maps?q=${coordinate.latitude},${coordinate.longitude})`,
-                inline: false,
-            });
-        }
-        if (scaleImage) {
-            embed.setThumbnail(`attachment://${scaleImage.name}`);
-        }
-        const files = [scaleImage, intensityMap].filter((file) => Boolean(file));
-        return files.length ? { embeds: [embed], files } : { embeds: [embed] };
-    });
+async function buildJmaEmbed(detail) {
+    const earthquake = detail.Body?.Earthquake;
+    const hypocenter = earthquake?.Hypocenter?.Area;
+    const maxScale = detail.Body?.Intensity?.Observation?.MaxInt;
+    const scaleImage = localScaleImage(jmaScaleToP2PScale(maxScale));
+    const coordinate = parseJmaCoordinate(hypocenter?.Coordinate);
+    const intensityMap = await (0, intensity_map_1.createIntensityMapAttachment)(detail, 'intensity-map.png').catch(() => null);
+    const embed = new discord_js_1.EmbedBuilder()
+        .setTitle(detail.Head?.Title ?? '直近の地震情報')
+        .setColor(0x2d6cdf)
+        .setDescription(detail.Head?.Text || '気象庁から発表された直近の地震情報です。')
+        .addFields({ name: '震源', value: hypocenter?.Name ?? '不明', inline: true }, { name: '規模', value: earthquake?.Magnitude ? `M${earthquake.Magnitude}` : '不明', inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter?.Depth, hypocenter?.Coordinate), inline: true }, { name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: '発生時刻', value: formatJstTime(earthquake?.OriginTime ?? earthquake?.ArrivalTime), inline: true }, { name: '発表時刻', value: formatJstTime(detail.Head?.ReportDateTime), inline: true })
+        .setFooter({ text: 'Source: 気象庁' });
+    if (intensityMap) {
+        embed.setImage('attachment://intensity-map.png');
+    }
+    if (coordinate) {
+        embed.addFields({
+            name: '地図',
+            value: `[震源付近を開く](https://www.google.com/maps?q=${coordinate.latitude},${coordinate.longitude})`,
+            inline: false,
+        });
+    }
+    if (scaleImage) {
+        embed.setThumbnail(`attachment://${scaleImage.name}`);
+    }
+    const files = [scaleImage, intensityMap].filter((file) => Boolean(file));
+    return files.length ? { embeds: [embed], files } : { embeds: [embed] };
 }
-function execute(interaction) {
-    return __awaiter(this, void 0, void 0, function* () {
-        yield interaction.deferReply({ ephemeral: true });
-        try {
-            const listResponse = yield fetch('https://www.jma.go.jp/bosai/quake/data/list.json');
-            if (!listResponse.ok)
-                throw new Error(`JMA list fetch failed: ${listResponse.status}`);
-            const list = yield listResponse.json();
-            const latestEvent = pickLatestEventItem(list);
-            const bestDetail = pickBestDetailItemForEvent(list, latestEvent === null || latestEvent === void 0 ? void 0 : latestEvent.eid);
-            if (!(bestDetail === null || bestDetail === void 0 ? void 0 : bestDetail.json)) {
-                yield interaction.editReply('直近の地震情報が見つかりませんでした。');
-                return;
-            }
-            const detail = yield fetchJmaDetail(bestDetail.json);
-            yield interaction.editReply(yield buildJmaEmbed(detail));
+async function execute(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+    try {
+        const listResponse = await (0, http_1.fetchWithTimeout)('https://www.jma.go.jp/bosai/quake/data/list.json');
+        if (!listResponse.ok)
+            throw new Error(`JMA list fetch failed: ${listResponse.status}`);
+        const list = await listResponse.json();
+        const latestEvent = pickLatestEventItem(list);
+        const bestDetail = pickBestDetailItemForEvent(list, latestEvent?.eid);
+        if (!bestDetail?.json) {
+            await interaction.editReply('直近の地震情報が見つかりませんでした。');
+            return;
         }
-        catch (error) {
-            console.error(error);
-            yield interaction.editReply('地震情報の取得中にエラーが発生しました。');
-        }
-    });
+        const detail = await fetchJmaDetail(bestDetail.json);
+        await interaction.editReply(await buildJmaEmbed(detail));
+    }
+    catch (error) {
+        console.error(error);
+        await interaction.editReply('地震情報の取得中にエラーが発生しました。');
+    }
 }

@@ -1,3 +1,4 @@
+import { fetchWithTimeout as fetch } from './http'
 import { AttachmentBuilder } from 'discord.js'
 import sharp, { type OverlayOptions } from 'sharp'
 
@@ -181,17 +182,6 @@ function buildLegendSvg(): string {
             ${rows}
         </g>
     `
-}
-
-function zoomFromMagnitude(magnitude?: string): number {
-    const value = Number(magnitude)
-    if (!Number.isFinite(value)) return 7
-    if (value >= 8) return 4
-    if (value >= 7) return 5
-    if (value >= 6) return 6
-    if (value >= 5) return 7
-    if (value >= 4) return 8
-    return 9
 }
 
 function zoomFromSpread(epicenter: Coordinate, points: Coordinate[]): number {

@@ -7,7 +7,9 @@
     "deploy-commands": "ts-node src/deploy-commands.ts",
     "railway:start": "node build/deploy-commands.js && npm start",
     "start": "node build/main.js",
-    "compile": "tsc -p ."
+    "compile": "tsc -p .",
+    "test": "npm run compile && node --test tests/*.test.cjs",
+    "lint": "eslint \"src/**/*.ts\""
   },
   "keywords": [],
   "author": "",
@@ -35,5 +37,8 @@
     "world-atlas": "^2.0.2",
     "ws": "^8.18.3"
   },
-  "description": ""
+  "description": "",
+  "engines": {
+    "node": ">=22.12.0"
+  }
 }

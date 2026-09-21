@@ -1,0 +1,18 @@
+// Read-only integration smoke test. Does not log into Discord or send messages.
+const fs = require('node:fs')
+const sharp = require('sharp')
+const { getRegions, getWarningReports, parseWarnings, getRain, upcomingRain, radarImage, warningEmbed } = require('../build/weather')
+;(async()=>{
+    const regions=await getRegions()
+    const region=regions.find(r=>r.code==='1310100')
+    if (!region || regions.length<1000) throw Error('地域一覧が不完全です')
+    const warnings=parseWarnings(await getWarningReports(region.office),region.code,true)
+    warningEmbed(region,warnings).toJSON()
+    const rain=upcomingRain(await getRain(region),1)
+    const radar=await radarImage(region)
+    const meta=await sharp(radar.attachment.attachment).metadata()
+    if(meta.width!==768 || meta.height!==768) throw Error('レーダー寸法不正')
+    fs.mkdirSync('sample-output',{recursive:true})
+    fs.writeFileSync('sample-output/weather-radar.png',radar.attachment.attachment)
+    console.log(JSON.stringify({regions:regions.length,region:region.name,warnings: warnings.codes,rain:rain || 'threshold not met',radar:radar.time.toISOString(),image:'sample-output/weather-radar.png'},null,2))
+})().catch(e=>{console.error(e);process.exitCode=1})

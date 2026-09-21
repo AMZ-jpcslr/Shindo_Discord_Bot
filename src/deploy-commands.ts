@@ -1,3 +1,5 @@
+import { data as weatherData } from './commands/weather'
+import { data as helpData } from './commands/help'
 import { REST, Routes } from 'discord.js'
 import dotenv from 'dotenv'
 import { data as getEqData } from './commands/get_eq'
@@ -10,6 +12,8 @@ import { data as shiftData } from './commands/shift'
 dotenv.config()
 
 const commands = [
+    weatherData.toJSON(),
+    helpData.toJSON(),
     pingData.toJSON(),
     lotteryData.toJSON(),
     shiftData.toJSON(),

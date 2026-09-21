@@ -1,13 +1,4 @@
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -111,128 +102,126 @@ function getMonthCalendar(year, month) {
     }
     return weeks;
 }
-function execute(interaction) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const sub = interaction.options.getSubcommand();
-        const userId = interaction.user.id;
-        const shifts = loadShifts();
-        if (sub === 'add') {
-            const date = interaction.options.getString('date', true);
-            const start = interaction.options.getString('start', true);
-            const end = interaction.options.getString('end', true);
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-                yield interaction.reply('日付はYYYY-MM-DD形式で入力してください。');
-                return;
-            }
-            if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) {
-                yield interaction.reply('開始時刻・終了時刻はHH:MM形式で入力してください。');
-                return;
-            }
-            if (!shifts[userId])
-                shifts[userId] = {};
-            shifts[userId][date] = `${start} - ${end}`;
-            saveShifts(shifts);
-            yield interaction.reply(`✅ ${date} のシフト「${start} - ${end}」を登録しました。`);
+async function execute(interaction) {
+    const sub = interaction.options.getSubcommand();
+    const userId = interaction.user.id;
+    const shifts = loadShifts();
+    if (sub === 'add') {
+        const date = interaction.options.getString('date', true);
+        const start = interaction.options.getString('start', true);
+        const end = interaction.options.getString('end', true);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            await interaction.reply('日付はYYYY-MM-DD形式で入力してください。');
+            return;
         }
-        else if (sub === 'show') {
-            const year = interaction.options.getInteger('year', true);
-            const month = interaction.options.getInteger('month', true);
-            const userShifts = shifts[userId];
-            if (!userShifts || Object.keys(userShifts).length === 0) {
-                yield interaction.reply('登録されたシフトがありません。');
-                return;
-            }
-            // 英語表記の曜日に変更
-            const weekLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            const cellWidth = 4; // [07] で3文字
-            const padCell = (s) => s.padEnd(cellWidth, ' ');
-            const weeks = getMonthCalendar(year, month);
-            // ヘッダー
-            let calendar = '|' + weekLabels.map(w => padCell(w)).join('|') + '|\n';
-            calendar += '|' + weekLabels.map(() => '-'.repeat(cellWidth)).join('|') + '|\n';
-            // 各週
-            for (const week of weeks) {
-                calendar += '|';
-                for (let i = 0; i < 7; i++) {
-                    const day = week[i];
-                    let cell = '';
-                    if (day) {
-                        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        // シフトがある日は角括弧で囲む
-                        cell = userShifts[dateStr]
-                            ? `[${day.toString().padStart(2, '0')}]`
-                            : `${day.toString().padStart(2, '0')}`;
-                    }
-                    else {
-                        cell = ' '.repeat(cellWidth);
-                    }
-                    calendar += padCell(cell) + '|';
+        if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) {
+            await interaction.reply('開始時刻・終了時刻はHH:MM形式で入力してください。');
+            return;
+        }
+        if (!shifts[userId])
+            shifts[userId] = {};
+        shifts[userId][date] = `${start} - ${end}`;
+        saveShifts(shifts);
+        await interaction.reply(`✅ ${date} のシフト「${start} - ${end}」を登録しました。`);
+    }
+    else if (sub === 'show') {
+        const year = interaction.options.getInteger('year', true);
+        const month = interaction.options.getInteger('month', true);
+        const userShifts = shifts[userId];
+        if (!userShifts || Object.keys(userShifts).length === 0) {
+            await interaction.reply('登録されたシフトがありません。');
+            return;
+        }
+        // 英語表記の曜日に変更
+        const weekLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const cellWidth = 4; // [07] で3文字
+        const padCell = (s) => s.padEnd(cellWidth, ' ');
+        const weeks = getMonthCalendar(year, month);
+        // ヘッダー
+        let calendar = '|' + weekLabels.map(w => padCell(w)).join('|') + '|\n';
+        calendar += '|' + weekLabels.map(() => '-'.repeat(cellWidth)).join('|') + '|\n';
+        // 各週
+        for (const week of weeks) {
+            calendar += '|';
+            for (let i = 0; i < 7; i++) {
+                const day = week[i];
+                let cell = '';
+                if (day) {
+                    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                    // シフトがある日は角括弧で囲む
+                    cell = userShifts[dateStr]
+                        ? `[${day.toString().padStart(2, '0')}]`
+                        : `${day.toString().padStart(2, '0')}`;
                 }
-                calendar += '\n';
-            }
-            const embed = new discord_js_1.EmbedBuilder()
-                .setTitle(`${interaction.user.username}'s Shift for ${year}/${month}`)
-                .setDescription('```' + calendar + '```\n[date]: シフトが登録されています\n`/shift show_detail` コマンドで詳細を表示できます。')
-                .setColor(0x00bfff);
-            yield interaction.reply({ embeds: [embed] });
-        }
-        else if (sub === 'show_detail') {
-            // シフト詳細表示
-            const year = interaction.options.getInteger('year', true);
-            const month = interaction.options.getInteger('month', true);
-            const userShifts = shifts[userId];
-            if (!userShifts || Object.keys(userShifts).length === 0) {
-                yield interaction.reply('登録されたシフトがありません。');
-                return;
-            }
-            let details = '';
-            for (let d = 1; d <= 31; d++) {
-                const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                if (userShifts[dateStr]) {
-                    details += `${dateStr}: ${userShifts[dateStr]}\n`;
+                else {
+                    cell = ' '.repeat(cellWidth);
                 }
+                calendar += padCell(cell) + '|';
             }
-            if (!details)
-                details = 'この月に登録されたシフトはありません。';
-            const embed = new discord_js_1.EmbedBuilder()
-                .setTitle(`${interaction.user.username}の ${year}/${month} のシフト詳細`)
-                .setDescription('```' + details + '```')
-                .setColor(0x00bfff);
-            yield interaction.reply({ embeds: [embed] });
+            calendar += '\n';
         }
-        else if (sub === 'delete') {
-            const date = interaction.options.getString('date', true);
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-                yield interaction.reply('日付はYYYY-MM-DD形式で入力してください。');
-                return;
-            }
-            if (!shifts[userId] || !shifts[userId][date]) {
-                yield interaction.reply(`指定した日付（${date}）のシフトは登録されていません。`);
-                return;
-            }
-            delete shifts[userId][date];
-            saveShifts(shifts);
-            yield interaction.reply(`🗑️ ${date} のシフトを削除しました。`);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setTitle(`${interaction.user.username}'s Shift for ${year}/${month}`)
+            .setDescription('```' + calendar + '```\n[date]: シフトが登録されています\n`/shift show_detail` コマンドで詳細を表示できます。')
+            .setColor(0x00bfff);
+        await interaction.reply({ embeds: [embed] });
+    }
+    else if (sub === 'show_detail') {
+        // シフト詳細表示
+        const year = interaction.options.getInteger('year', true);
+        const month = interaction.options.getInteger('month', true);
+        const userShifts = shifts[userId];
+        if (!userShifts || Object.keys(userShifts).length === 0) {
+            await interaction.reply('登録されたシフトがありません。');
+            return;
         }
-        else if (sub === 'edit') {
-            const date = interaction.options.getString('date', true);
-            const start = interaction.options.getString('start', true);
-            const end = interaction.options.getString('end', true);
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-                yield interaction.reply('日付はYYYY-MM-DD形式で入力してください。');
-                return;
+        let details = '';
+        for (let d = 1; d <= 31; d++) {
+            const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            if (userShifts[dateStr]) {
+                details += `${dateStr}: ${userShifts[dateStr]}\n`;
             }
-            if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) {
-                yield interaction.reply('開始時刻・終了時刻はHH:MM形式で入力してください。');
-                return;
-            }
-            if (!shifts[userId] || !shifts[userId][date]) {
-                yield interaction.reply(`指定した日付（${date}）のシフトは登録されていません。`);
-                return;
-            }
-            shifts[userId][date] = `${start} - ${end}`;
-            saveShifts(shifts);
-            yield interaction.reply(`✏️ ${date} のシフトを「${start} - ${end}」に編集しました。`);
         }
-    });
+        if (!details)
+            details = 'この月に登録されたシフトはありません。';
+        const embed = new discord_js_1.EmbedBuilder()
+            .setTitle(`${interaction.user.username}の ${year}/${month} のシフト詳細`)
+            .setDescription('```' + details + '```')
+            .setColor(0x00bfff);
+        await interaction.reply({ embeds: [embed] });
+    }
+    else if (sub === 'delete') {
+        const date = interaction.options.getString('date', true);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            await interaction.reply('日付はYYYY-MM-DD形式で入力してください。');
+            return;
+        }
+        if (!shifts[userId] || !shifts[userId][date]) {
+            await interaction.reply(`指定した日付（${date}）のシフトは登録されていません。`);
+            return;
+        }
+        delete shifts[userId][date];
+        saveShifts(shifts);
+        await interaction.reply(`🗑️ ${date} のシフトを削除しました。`);
+    }
+    else if (sub === 'edit') {
+        const date = interaction.options.getString('date', true);
+        const start = interaction.options.getString('start', true);
+        const end = interaction.options.getString('end', true);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            await interaction.reply('日付はYYYY-MM-DD形式で入力してください。');
+            return;
+        }
+        if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) {
+            await interaction.reply('開始時刻・終了時刻はHH:MM形式で入力してください。');
+            return;
+        }
+        if (!shifts[userId] || !shifts[userId][date]) {
+            await interaction.reply(`指定した日付（${date}）のシフトは登録されていません。`);
+            return;
+        }
+        shifts[userId][date] = `${start} - ${end}`;
+        saveShifts(shifts);
+        await interaction.reply(`✏️ ${date} のシフトを「${start} - ${end}」に編集しました。`);
+    }
 }

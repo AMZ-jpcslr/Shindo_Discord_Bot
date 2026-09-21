@@ -46,6 +46,10 @@ export const data = new SlashCommandBuilder()
     )
 
 export async function execute(interaction: ChatInputCommandInteraction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: '設定変更には「サーバー管理」権限が必要です。', ephemeral: true })
+        return
+    }
     const guildId = interaction.guildId
     if (!guildId) {
         await interaction.reply({ content: 'このコマンドはサーバー内でのみ使用できます。', ephemeral: true })

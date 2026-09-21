@@ -32,19 +32,14 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const weatherCommand = __importStar(require("./commands/weather"));
+const helpCommand = __importStar(require("./commands/help"));
+const weather_notify_1 = require("./weather_notify");
+const weather_1 = require("./weather");
 const discord_js_1 = require("discord.js");
 const dotenv_1 = __importDefault(require("dotenv"));
 const getEqCommand = __importStar(require("./commands/get_eq"));
@@ -66,18 +61,18 @@ const client = new discord_js_1.Client({
     ],
 });
 function setBotPresence() {
-    var _a;
-    (_a = client.user) === null || _a === void 0 ? void 0 : _a.setPresence({
-        activities: [{ name: '緊急地震速報を監視中', type: 3 }],
+    client.user?.setPresence({
+        activities: [{ name: '地震・津波・気象情報 | /help', type: 3 }],
         status: 'online',
     });
 }
 client.once('ready', () => {
-    var _a;
     console.log('Ready!');
-    console.log((_a = client.user) === null || _a === void 0 ? void 0 : _a.tag);
+    console.log(client.user?.tag);
     setBotPresence();
     (0, eq_notify_1.startEqAutoNotify)(client);
+    (0, weather_notify_1.startWeatherNotify)(client);
+    (0, weather_1.getRegions)().catch(error => console.error('地域候補の準備に失敗:', error));
     setInterval(() => {
         console.log(`Bot稼働中: ping=${client.ws.ping}ms / guilds=${client.guilds.cache.size}`);
     }, 5 * 60 * 1000);
@@ -85,40 +80,51 @@ client.once('ready', () => {
 client.on('shardResume', () => {
     setBotPresence();
 });
-client.on('interactionCreate', (interaction) => __awaiter(void 0, void 0, void 0, function* () {
+client.on('interactionCreate', async (interaction) => {
+    if (interaction.isAutocomplete() && interaction.commandName === 'weather') {
+        await weatherCommand.autocomplete(interaction);
+        return;
+    }
     if (!interaction.isChatInputCommand())
         return;
     try {
         switch (interaction.commandName) {
+            case 'weather':
+                await weatherCommand.execute(interaction);
+                break;
+            case 'help':
+                await helpCommand.execute(interaction);
+                break;
             case 'ping':
-                yield pingCommand.execute(interaction);
+                await pingCommand.execute(interaction);
                 break;
             case 'lottery':
-                yield lotteryCommand.execute(interaction);
+                await lotteryCommand.execute(interaction);
                 break;
             case 'shift':
-                yield shiftCommand.execute(interaction);
+                await shiftCommand.execute(interaction);
                 break;
             case 'set_eq_channel':
-                yield setEqChannelCommand.execute(interaction);
+                await setEqChannelCommand.execute(interaction);
                 break;
             case 'set_eq_threshold':
-                yield setEqThresholdCommand.execute(interaction);
+                await setEqThresholdCommand.execute(interaction);
                 break;
             case 'get_eq':
-                yield getEqCommand.execute(interaction);
+                await getEqCommand.execute(interaction);
                 break;
         }
     }
     catch (error) {
         console.error('コマンド実行エラー:', error);
-        const message = 'コマンドの実行中にエラーが発生しました。';
+        const message = '情報の取得・設定に失敗しました。少し待って再実行してください。通知設定は /weather status、使い方は /help で確認できます。';
         if (interaction.deferred || interaction.replied) {
-            yield interaction.editReply(message).catch(() => undefined);
+            await interaction.editReply(message).catch(() => undefined);
         }
         else {
-            yield interaction.reply({ content: message, ephemeral: true }).catch(() => undefined);
+            await interaction.reply({ content: message, ephemeral: true }).catch(() => undefined);
         }
     }
-}));
-client.login(token);
+});
+client.on('error', error => console.error('Discord接続エラー:', error));
+client.login(token).catch(error => { console.error('Discord接続失敗:', error); process.exitCode = 1; });

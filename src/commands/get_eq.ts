@@ -1,3 +1,4 @@
+import { fetchWithTimeout as fetch } from '../http'
 import { AttachmentBuilder, ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js'
 import fs from 'fs'
 import path from 'path'
@@ -233,7 +234,7 @@ async function buildJmaEmbed(detail: JmaQuakeDetail): Promise<{ embeds: EmbedBui
     const maxScale = detail.Body?.Intensity?.Observation?.MaxInt
     const scaleImage = localScaleImage(jmaScaleToP2PScale(maxScale))
     const coordinate = parseJmaCoordinate(hypocenter?.Coordinate)
-    const intensityMap = await createIntensityMapAttachment(detail, 'intensity-map.png')
+    const intensityMap = await createIntensityMapAttachment(detail, 'intensity-map.png').catch(() => null)
 
     const embed = new EmbedBuilder()
         .setTitle(detail.Head?.Title ?? '直近の地震情報')
