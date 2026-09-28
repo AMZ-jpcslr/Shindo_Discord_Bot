@@ -1,4 +1,4 @@
-import { fetchWithTimeout as fetch } from './http'
+import { fetchBaseMapTile, baseMapAttributionSvg } from './basemap'
 import { AttachmentBuilder } from 'discord.js'
 import sharp, { type OverlayOptions } from 'sharp'
 
@@ -227,21 +227,6 @@ function collectStations(detail: IntensityMapDetail): (IntensityStation & { coor
         .sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int)) ?? []
 }
 
-async function fetchTile(zoom: number, x: number, y: number): Promise<Buffer | null> {
-    const maxTile = 2 ** zoom
-    if (x < 0 || y < 0 || x >= maxTile || y >= maxTile) return null
-
-    const response = await fetch(`https://a.basemaps.cartocdn.com/dark_nolabels/${zoom}/${x}/${y}.png`)
-    if (!response.ok) return null
-
-    const source = Buffer.from(await response.arrayBuffer())
-    return sharp(source)
-        .removeAlpha()
-        .modulate({ brightness: 0.85, saturation: 0.35 })
-        .png()
-        .toBuffer()
-}
-
 function buildOverlaySvg(
     detail: IntensityMapDetail,
     epicenter: Coordinate,
@@ -290,6 +275,7 @@ function buildOverlaySvg(
                 <line x1="8" y1="-8" x2="-8" y2="8" stroke="#ffffff" stroke-width="1" stroke-linecap="round"/>
             </g>
             ${buildLegendSvg()}
+            ${baseMapAttributionSvg(MAP_WIDTH, MAP_HEIGHT)}
         </svg>
     `
 
@@ -318,7 +304,7 @@ export async function createIntensityMapAttachment(
 
     for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
         for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
-            const tile = await fetchTile(zoom, tileX, tileY)
+            const tile = await fetchBaseMapTile(zoom, tileX, tileY)
             if (!tile) continue
 
             composites.push({

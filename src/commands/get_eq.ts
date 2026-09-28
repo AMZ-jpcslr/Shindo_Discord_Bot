@@ -1,3 +1,4 @@
+import { BASEMAP_CREDIT } from '../basemap'
 import { fetchWithTimeout as fetch } from '../http'
 import { AttachmentBuilder, ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js'
 import fs from 'fs'
@@ -252,6 +253,7 @@ async function buildJmaEmbed(detail: JmaQuakeDetail): Promise<{ embeds: EmbedBui
 
     if (intensityMap) {
         embed.setImage('attachment://intensity-map.png')
+        embed.addFields(BASEMAP_CREDIT)
     }
 
     if (coordinate) {

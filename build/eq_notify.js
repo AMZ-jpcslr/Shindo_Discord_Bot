@@ -11,6 +11,7 @@ exports.sendToConfiguredChannels = sendToConfiguredChannels;
 exports.scaleRank = scaleRank;
 exports.handleP2PMessage = handleP2PMessage;
 exports.startEqAutoNotify = startEqAutoNotify;
+const basemap_1 = require("./basemap");
 const storage_1 = require("./storage");
 const http_1 = require("./http");
 const discord_js_1 = require("discord.js");
@@ -356,6 +357,7 @@ async function buildP2PQuakeEmbed(message) {
     }
     if (intensityMap) {
         embed.setImage('attachment://intensity-map.png');
+        embed.addFields(basemap_1.BASEMAP_CREDIT);
     }
     const files = [scaleImage, intensityMap].filter((file) => Boolean(file));
     return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] };
@@ -385,6 +387,7 @@ async function buildJmaQuakeEmbed(detail) {
         .setTimestamp(new Date());
     if (intensityMap) {
         embed.setImage('attachment://intensity-map.png');
+        embed.addFields(basemap_1.BASEMAP_CREDIT);
     }
     if (coordinateLink) {
         embed.addFields({ name: '地図', value: coordinateLink, inline: true });
@@ -422,6 +425,7 @@ async function buildJmaTsunamiEmbed(detail) {
     }
     if (disasterMap) {
         embed.setImage('attachment://tsunami-map.png');
+        embed.addFields(basemap_1.BASEMAP_CREDIT);
     }
     return disasterMap ? { content, embeds: [embed], files: [disasterMap] } : { content, embeds: [embed] };
 }

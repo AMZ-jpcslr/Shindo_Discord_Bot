@@ -1,3 +1,4 @@
+import { BASEMAP_CREDIT } from './basemap'
 import { readJson, writeJson } from './storage'
 import { fetchWithTimeout as fetch } from './http'
 import {
@@ -582,6 +583,7 @@ async function buildP2PQuakeEmbed(message: P2PQuakeMessage): Promise<DiscordPayl
 
     if (intensityMap) {
         embed.setImage('attachment://intensity-map.png')
+        embed.addFields(BASEMAP_CREDIT)
     }
 
     const files = [scaleImage, intensityMap].filter((file): file is AttachmentBuilder => Boolean(file))
@@ -625,6 +627,7 @@ async function buildJmaQuakeEmbed(detail: JmaQuakeDetail): Promise<DiscordPayloa
 
     if (intensityMap) {
         embed.setImage('attachment://intensity-map.png')
+        embed.addFields(BASEMAP_CREDIT)
     }
 
     if (coordinateLink) {
@@ -673,6 +676,7 @@ async function buildJmaTsunamiEmbed(detail: JmaTsunamiDetail): Promise<DiscordPa
 
     if (disasterMap) {
         embed.setImage('attachment://tsunami-map.png')
+        embed.addFields(BASEMAP_CREDIT)
     }
 
     return disasterMap ? { content, embeds: [embed], files: [disasterMap] } : { content, embeds: [embed] }

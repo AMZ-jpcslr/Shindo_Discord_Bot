@@ -7,7 +7,7 @@ exports.PREFECTURE_POINTS = void 0;
 exports.pointForAreaName = pointForAreaName;
 exports.linesForTsunamiAreaName = linesForTsunamiAreaName;
 exports.createDisasterMapAttachment = createDisasterMapAttachment;
-const http_1 = require("./http");
+const basemap_1 = require("./basemap");
 const discord_js_1 = require("discord.js");
 const sharp_1 = __importDefault(require("sharp"));
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -379,20 +379,6 @@ function calculateZoom(points, lines = []) {
         return 7;
     return 8;
 }
-async function fetchTile(zoom, x, y) {
-    const maxTile = 2 ** zoom;
-    if (x < 0 || y < 0 || x >= maxTile || y >= maxTile)
-        return null;
-    const response = await (0, http_1.fetchWithTimeout)(`https://a.basemaps.cartocdn.com/dark_nolabels/${zoom}/${x}/${y}.png`);
-    if (!response.ok)
-        return null;
-    const source = Buffer.from(await response.arrayBuffer());
-    return (0, sharp_1.default)(source)
-        .removeAlpha()
-        .modulate({ brightness: 0.85, saturation: 0.35 })
-        .png()
-        .toBuffer();
-}
 function buildOverlaySvg(points, lines, center, zoom) {
     const centerPoint = project(center, zoom);
     const left = centerPoint.x - MAP_WIDTH / 2;
@@ -450,6 +436,7 @@ function buildOverlaySvg(points, lines, center, zoom) {
             ${lineUnderlaySvg}
             ${lineOverlaySvg}
             ${pointSvg}
+            ${(0, basemap_1.baseMapAttributionSvg)(MAP_WIDTH, MAP_HEIGHT)}
         </svg>
     `);
 }
@@ -483,7 +470,7 @@ async function createDisasterMapAttachment(points, name = 'disaster-map.png', li
     const composites = [];
     for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
         for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
-            const tile = await fetchTile(zoom, tileX, tileY);
+            const tile = await (0, basemap_1.fetchBaseMapTile)(zoom, tileX, tileY);
             if (!tile)
                 continue;
             composites.push({

@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.data = void 0;
 exports.execute = execute;
+const basemap_1 = require("../basemap");
 const http_1 = require("../http");
 const discord_js_1 = require("discord.js");
 const fs_1 = __importDefault(require("fs"));
@@ -181,6 +182,7 @@ async function buildJmaEmbed(detail) {
         .setFooter({ text: 'Source: 気象庁' });
     if (intensityMap) {
         embed.setImage('attachment://intensity-map.png');
+        embed.addFields(basemap_1.BASEMAP_CREDIT);
     }
     if (coordinate) {
         embed.addFields({

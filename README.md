@@ -226,6 +226,7 @@ npm ci → TypeScriptビルド → 開発用依存関係を削除
 | 地域の候補が出ない | 市区町村名の一部で検索。起動直後や通信障害時は少し待って再実行 |
 | 気象通知が届かない | `/weather status` で登録・ON/OFF・エラーを確認。対象の警報や降水予報がない間は通知されません |
 | チャンネルへの送信に失敗する | Botの閲覧・送信・埋め込みリンク権限と、チャンネル側の権限設定を確認 |
+| 地震マップに `API KEY REQUIRED` と出る | 旧版のCARTO地図による表示です。地理院タイルに切り替えた最新版を再ビルド・再デプロイしてください。APIキーの追加は不要です |
 | 雨雲画像が表示されない | ファイル添付権限を確認。取得失敗時は表示された気象庁のリンクを利用 |
 | 再デプロイで設定が消える | Volumeのマウント先と `DATA_DIR` がともに `/data` か確認 |
 
@@ -275,7 +276,9 @@ npm audit
 - [気象庁](https://www.jma.go.jp/)：地震・津波・気象警報・河川氾濫情報・雨雲
 - [P2P地震情報](https://www.p2pquake.net/)：地震情報・緊急地震速報の配信
 - [Open-Meteo](https://open-meteo.com/en/docs)：時間別降水予報
-- [地理院タイル](https://maps.gsi.go.jp/development/ichiran.html)：雨雲レーダーの背景地図
-- [CARTO](https://carto.com/attributions)／[OpenStreetMap contributors](https://www.openstreetmap.org/copyright)：地震・津波マップの背景地図
+- [地理院タイル](https://maps.gsi.go.jp/development/ichiran.html)：地震・津波・雨雲レーダーの背景地図（地震・津波は色調加工）
+- [CARTO](https://carto.com/attributions)／[OpenStreetMap contributors](https://www.openstreetmap.org/copyright)：README掲載の旧サンプル画像の背景地図
 
 Open-Meteoの無料APIは非商用利用向けです。商用・大規模運用では提供元の利用条件と上限を確認してください。通知は配信元・回線・Discordの状態に依存するため、自治体や気象庁の最新情報も確認してください。
+
+地理院タイルの小縮尺地図の海岸線出典：Shoreline data is derived from: United States. National Imagery and Mapping Agency. "Vector Map Level 0 (VMAP0)." Bethesda, MD: Denver, CO: The Agency; USGS Information Services, 1997.

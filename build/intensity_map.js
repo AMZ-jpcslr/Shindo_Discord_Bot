@@ -4,7 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createIntensityMapAttachment = createIntensityMapAttachment;
-const http_1 = require("./http");
+const basemap_1 = require("./basemap");
 const discord_js_1 = require("discord.js");
 const sharp_1 = __importDefault(require("sharp"));
 const TILE_SIZE = 256;
@@ -164,20 +164,6 @@ function collectStations(detail) {
     }))
         .sort((a, b) => intensityRank(b.Int) - intensityRank(a.Int)) ?? [];
 }
-async function fetchTile(zoom, x, y) {
-    const maxTile = 2 ** zoom;
-    if (x < 0 || y < 0 || x >= maxTile || y >= maxTile)
-        return null;
-    const response = await (0, http_1.fetchWithTimeout)(`https://a.basemaps.cartocdn.com/dark_nolabels/${zoom}/${x}/${y}.png`);
-    if (!response.ok)
-        return null;
-    const source = Buffer.from(await response.arrayBuffer());
-    return (0, sharp_1.default)(source)
-        .removeAlpha()
-        .modulate({ brightness: 0.85, saturation: 0.35 })
-        .png()
-        .toBuffer();
-}
 function buildOverlaySvg(detail, epicenter, stations, zoom) {
     const center = project(epicenter, zoom);
     const left = center.x - MAP_WIDTH / 2;
@@ -216,6 +202,7 @@ function buildOverlaySvg(detail, epicenter, stations, zoom) {
                 <line x1="8" y1="-8" x2="-8" y2="8" stroke="#ffffff" stroke-width="1" stroke-linecap="round"/>
             </g>
             ${buildLegendSvg()}
+            ${(0, basemap_1.baseMapAttributionSvg)(MAP_WIDTH, MAP_HEIGHT)}
         </svg>
     `;
     return Buffer.from(svg);
@@ -237,7 +224,7 @@ async function createIntensityMapAttachment(detail, name = 'intensity-map.png') 
     const composites = [];
     for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
         for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
-            const tile = await fetchTile(zoom, tileX, tileY);
+            const tile = await (0, basemap_1.fetchBaseMapTile)(zoom, tileX, tileY);
             if (!tile)
                 continue;
             composites.push({
