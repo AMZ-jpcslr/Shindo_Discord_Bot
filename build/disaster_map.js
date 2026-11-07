@@ -468,18 +468,22 @@ async function createDisasterMapAttachment(points, name = 'disaster-map.png', li
     const minTileY = Math.floor(top / TILE_SIZE);
     const maxTileY = Math.floor((top + MAP_HEIGHT) / TILE_SIZE);
     const composites = [];
+    const coordinates = [];
     for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
-        for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
-            const tile = await (0, basemap_1.fetchBaseMapTile)(zoom, tileX, tileY);
-            if (!tile)
-                continue;
-            composites.push({
-                input: tile,
-                left: Math.round(tileX * TILE_SIZE - left),
-                top: Math.round(tileY * TILE_SIZE - top),
-            });
-        }
+        for (let tileX = minTileX; tileX <= maxTileX; tileX++)
+            coordinates.push([zoom, tileX, tileY]);
     }
+    const tiles = await (0, basemap_1.fetchBaseMapTiles)(coordinates);
+    tiles.forEach((tile, index) => {
+        if (!tile)
+            return;
+        const [, tileX, tileY] = coordinates[index];
+        composites.push({
+            input: tile,
+            left: Math.round(tileX * TILE_SIZE - left),
+            top: Math.round(tileY * TILE_SIZE - top),
+        });
+    });
     composites.push({
         input: buildOverlaySvg(points, lines, center, zoom),
         left: 0,

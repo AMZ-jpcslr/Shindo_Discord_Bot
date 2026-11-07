@@ -3,17 +3,26 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.QUAKE_MAP_WAIT_MS = void 0;
 exports.loadEqChannels = loadEqChannels;
 exports.saveEqChannels = saveEqChannels;
 exports.loadEqThresholds = loadEqThresholds;
 exports.saveEqThresholds = saveEqThresholds;
 exports.sendToConfiguredChannels = sendToConfiguredChannels;
 exports.scaleRank = scaleRank;
+exports.buildJmaQuakeEmbed = buildJmaQuakeEmbed;
+exports.jmaEventKey = jmaEventKey;
+exports.mergeJmaDetail = mergeJmaDetail;
+exports.applyJmaQuakeReport = applyJmaQuakeReport;
+exports.retryP2PFallbacks = retryP2PFallbacks;
+exports.pollJmaQuake = pollJmaQuake;
+exports.pollJmaTsunami = pollJmaTsunami;
 exports.handleP2PMessage = handleP2PMessage;
 exports.startEqAutoNotify = startEqAutoNotify;
 const basemap_1 = require("./basemap");
 const storage_1 = require("./storage");
 const http_1 = require("./http");
+const jma_polling_1 = require("./jma_polling");
 const discord_js_1 = require("discord.js");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -32,7 +41,7 @@ function saveLatestIds(ids) { (0, storage_1.writeJson)('latest_eq_ids.json', { .
 function isSendableChannel(channel) {
     return Boolean(channel && 'send' in channel && typeof channel.send === 'function');
 }
-async function sendToConfiguredChannels(client, payload, maxScale, deliveryKey, bypassThreshold = false) {
+async function sendToConfiguredChannels(client, payload, maxScale, deliveryKey, bypassThreshold = false, onDelivered) {
     const channels = loadEqChannels();
     const thresholds = loadEqThresholds();
     const sent = (0, storage_1.readJson)('eq-deliveries.json', {});
@@ -50,11 +59,13 @@ async function sendToConfiguredChannels(client, payload, maxScale, deliveryKey, 
             const channel = guild.channels.cache.get(channelId) ?? await guild.channels.fetch(channelId);
             if (!isSendableChannel(channel))
                 throw new Error('送信できないチャンネル');
-            await channel.send(payload);
+            const message = await channel.send(payload);
             sent[key] = Date.now();
             const current = { ...(0, storage_1.readJson)('eq-deliveries.json', {}), [key]: sent[key] };
             const entries = Object.entries(current).sort((a, b) => b[1] - a[1]).slice(0, 2000);
             (0, storage_1.writeJson)('eq-deliveries.json', Object.fromEntries(entries));
+            if (message?.id)
+                onDelivered?.(guildId, channelId, message.id);
         }
         catch (error) {
             console.error(`通知送信失敗: ${guildId}/${channelId}`, error);
@@ -64,10 +75,9 @@ async function sendToConfiguredChannels(client, payload, maxScale, deliveryKey, 
     if (failures.length)
         throw new Error(`通知未達: ${failures.join(',')}`);
 }
-async function sendDisasterToConfiguredChannels(client, payload, deliveryKey) {
-    return sendToConfiguredChannels(client, payload, undefined, deliveryKey, true);
-}
 function scaleToString(scale) {
+    if (typeof scale === 'number' && scale <= 0)
+        return '不明';
     const value = typeof scale === 'string' ? Number(scale) : scale;
     switch (value) {
         case 10: return '1';
@@ -79,7 +89,8 @@ function scaleToString(scale) {
         case 55: return '6弱';
         case 60: return '6強';
         case 70: return '7';
-        default: return scale ? String(scale) : '不明';
+        case undefined: return '不明';
+        default: return scale ? String(scale).replace('+', '強').replace('-', '弱') : '不明';
     }
 }
 function scaleRank(scale) {
@@ -121,7 +132,7 @@ function formatDepth(depth) {
     if (depth === undefined || depth === null || depth === '')
         return '不明';
     if (typeof depth === 'number')
-        return depth === 0 ? 'ごく浅い' : `${depth}km`;
+        return depth < 0 ? '不明' : depth === 0 ? 'ごく浅い' : `${depth}km`;
     return depth;
 }
 function depthFromJmaCoordinate(coordinate) {
@@ -166,12 +177,12 @@ function formatJstTime(time) {
     return `${value('year')}年${value('month')}月${value('day')}日 ${value('hour')}:${value('minute')}`;
 }
 function formatMagnitude(magnitude) {
-    if (magnitude === undefined || magnitude === null || magnitude === '')
+    if (magnitude === undefined || magnitude === null || magnitude === '' || Number(magnitude) < 0)
         return '不明';
     return `M${magnitude}`;
 }
 function formatCoordinate(latitude, longitude) {
-    if (typeof latitude !== 'number' || typeof longitude !== 'number')
+    if (typeof latitude !== 'number' || typeof longitude !== 'number' || latitude === -200 || longitude === -200 || Math.abs(latitude) > 90 || Math.abs(longitude) > 180)
         return null;
     return `[震源付近を開く](https://www.google.com/maps?q=${latitude},${longitude})`;
 }
@@ -186,44 +197,18 @@ function parseJmaCoordinate(coordinate) {
         longitude: Number(match[2]),
     };
 }
-function normalizeJmaTime(time) {
-    if (!time)
-        return null;
-    return time.replace(/\//g, '-').replace(' ', 'T').slice(0, 16);
-}
-async function fetchJmaList() {
-    const response = await (0, http_1.fetchWithTimeout)(JMA_QUAKE_LIST_URL);
-    if (!response.ok)
-        throw new Error(`JMA list fetch failed: ${response.status}`);
-    return response.json();
-}
-function selectBestJmaItem(items) {
-    return items
-        .filter(item => isValidJmaJsonPath(item.json))
-        .sort((a, b) => {
-        const aHasIntensityMap = a.json?.includes('VXSE5k') ? 1 : 0;
-        const bHasIntensityMap = b.json?.includes('VXSE5k') ? 1 : 0;
-        if (aHasIntensityMap !== bHasIntensityMap)
-            return bHasIntensityMap - aHasIntensityMap;
-        if (a.maxi && !b.maxi)
-            return -1;
-        if (!a.maxi && b.maxi)
-            return 1;
-        return String(b.ctt ?? '').localeCompare(String(a.ctt ?? ''));
-    })[0];
-}
+const quakeFeed = (0, jma_polling_1.createCachedJsonFeed)(JMA_QUAKE_LIST_URL);
+const tsunamiFeed = (0, jma_polling_1.createCachedJsonFeed)(JMA_TSUNAMI_LIST_URL);
+let quakeDetailsHealthy = true;
 async function fetchJmaDetail(jsonPath) {
     const detailUrl = `https://www.jma.go.jp/bosai/quake/data/${jsonPath}`;
     const detailResponse = await (0, http_1.fetchWithTimeout)(detailUrl);
     if (!detailResponse.ok)
         throw new Error(`JMA detail fetch failed: ${detailResponse.status}`);
-    return detailResponse.json();
-}
-async function fetchJmaTsunamiList() {
-    const response = await (0, http_1.fetchWithTimeout)(JMA_TSUNAMI_LIST_URL);
-    if (!response.ok)
-        throw new Error(`JMA tsunami list fetch failed: ${response.status}`);
-    return response.json();
+    const detail = await detailResponse.json();
+    if (!detail || typeof detail !== 'object' || !detail.Head)
+        throw new Error('Invalid JMA earthquake detail');
+    return detail;
 }
 async function fetchJmaTsunamiDetail(jsonPath) {
     const detailUrl = `https://www.jma.go.jp/bosai/tsunami/data/${jsonPath}`;
@@ -231,25 +216,6 @@ async function fetchJmaTsunamiDetail(jsonPath) {
     if (!detailResponse.ok)
         throw new Error(`JMA tsunami detail fetch failed: ${detailResponse.status}`);
     return detailResponse.json();
-}
-async function findJmaDetailForP2P(eventId, originTime, hypocenterName, magnitude) {
-    const list = await fetchJmaList();
-    const normalizedOrigin = normalizeJmaTime(originTime);
-    const normalizedMagnitude = typeof magnitude === 'number' ? magnitude.toFixed(1) : null;
-    const candidates = list.filter(item => {
-        if (!isValidJmaJsonPath(item.json))
-            return false;
-        if (eventId && item.eid === eventId)
-            return true;
-        const sameTime = normalizedOrigin && normalizeJmaTime(item.at) === normalizedOrigin;
-        const sameName = !hypocenterName || item.anm === hypocenterName;
-        const sameMagnitude = !normalizedMagnitude || item.mag === normalizedMagnitude;
-        return Boolean(sameTime && sameName && sameMagnitude);
-    });
-    const best = selectBestJmaItem(candidates);
-    if (!best?.json)
-        return null;
-    return fetchJmaDetail(best.json);
 }
 function tsunamiColor(kindName) {
     if (kindName?.includes('警報'))
@@ -331,21 +297,22 @@ async function buildP2PQuakeEmbed(message) {
     const hypocenter = quake?.hypocenter;
     const scaleImage = localScaleImage(quake?.maxScale);
     const coordinateLink = formatCoordinate(hypocenter?.latitude, hypocenter?.longitude);
-    const jmaDetail = await findJmaDetailForP2P(undefined, quake?.time, hypocenter?.name, hypocenter?.magnitude).catch(() => null);
-    const intensityMap = jmaDetail ? await (0, intensity_map_1.createIntensityMapAttachment)(jmaDetail, 'intensity-map.png').catch(() => null) : null;
-    const jmaHypocenter = jmaDetail?.Body?.Earthquake?.Hypocenter?.Area;
     const observedPoints = [...(message.points ?? [])]
         .sort((a, b) => (b.scale ?? 0) - (a.scale ?? 0))
         .slice(0, 8)
         .map(point => `${point.pref ?? ''}${point.addr ?? ''}: ${scaleToString(point.scale)}`)
         .join('\n');
-    const content = `地震情報: ${hypocenter?.name ?? '震源不明'} 最大震度 ${scaleToString(quake?.maxScale)}`;
+    const preliminary = !hypocenter?.name;
+    const content = `地震情報（P2P代替速報）: 最大震度 ${scaleToString(quake?.maxScale)} / ${hypocenter?.name || '震源は解析中'}`;
     const embed = new discord_js_1.EmbedBuilder()
-        .setTitle('地震情報')
+        .setTitle('地震情報（P2P代替速報）')
+        .setDescription(`${preliminary ? '震源・規模・深さは解析中です。\n' : ''}気象庁の取得が不調のため代替配信しています。共通イベントIDがないため、復旧後の気象庁情報とは別投稿になります。`)
         .setColor(0x2d6cdf)
-        .addFields({ name: '震源', value: hypocenter?.name ?? '不明', inline: true }, { name: '規模', value: formatMagnitude(hypocenter?.magnitude), inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter?.depth ?? jmaHypocenter?.Depth, jmaHypocenter?.Coordinate), inline: true }, { name: '最大震度', value: scaleToString(quake?.maxScale), inline: true }, { name: '発生時刻', value: formatJstTime(quake?.time), inline: true }, { name: '津波', value: quake?.domesticTsunami === 'None' ? '心配なし' : quake?.domesticTsunami ?? '不明', inline: true })
+        .addFields({ name: '最大震度', value: scaleToString(quake?.maxScale), inline: true }, { name: '発生時刻', value: formatJstTime(quake?.time), inline: true }, { name: '津波', value: { None: '心配なし', Unknown: '調査中', Checking: '調査中', NonEffective: '若干の海面変動の可能性', Watch: '津波注意報あり', Warning: '津波警報あり' }[quake?.domesticTsunami ?? ''] ?? '調査中', inline: true })
         .setFooter({ text: `Source: ${message.issue?.source ?? 'P2P地震情報 / 気象庁'}` })
         .setTimestamp(new Date());
+    if (!preliminary)
+        embed.addFields({ name: '震源', value: hypocenter.name, inline: true }, { name: '規模', value: formatMagnitude(hypocenter?.magnitude), inline: true }, { name: '深さ', value: formatDepth(hypocenter?.depth), inline: true });
     if (coordinateLink) {
         embed.addFields({ name: '地図', value: coordinateLink, inline: true });
     }
@@ -355,36 +322,39 @@ async function buildP2PQuakeEmbed(message) {
     if (scaleImage) {
         embed.setThumbnail(`attachment://${scaleImage.name}`);
     }
-    if (intensityMap) {
-        embed.setImage('attachment://intensity-map.png');
-        embed.addFields(basemap_1.BASEMAP_CREDIT);
-    }
-    const files = [scaleImage, intensityMap].filter((file) => Boolean(file));
+    const files = [scaleImage].filter((file) => Boolean(file));
     return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] };
 }
 function isValidJmaJsonPath(jsonPath) {
-    return (typeof jsonPath === 'string' &&
-        jsonPath.endsWith('.json') &&
-        !jsonPath.startsWith('/') &&
-        !jsonPath.includes('..'));
+    return (typeof jsonPath === 'string' && /^[A-Za-z0-9_-]+\.json$/.test(jsonPath));
 }
-async function buildJmaQuakeEmbed(detail) {
+async function buildJmaQuakeEmbed(detail, includeMap = false) {
     const earthquake = detail.Body?.Earthquake;
     const hypocenter = earthquake?.Hypocenter?.Area;
     const maxScale = detail.Body?.Intensity?.Observation?.MaxInt;
     const coordinate = parseJmaCoordinate(hypocenter?.Coordinate);
     const coordinateLink = formatCoordinate(coordinate?.latitude, coordinate?.longitude);
-    const intensityMap = await (0, intensity_map_1.createIntensityMapAttachment)(detail, 'intensity-map.png').catch(() => null);
+    const intensityMap = includeMap ? await (0, intensity_map_1.createIntensityMapAttachment)(detail, 'intensity-map.png').catch(() => null) : null;
     const scaleImage = localScaleImage(scaleRank(maxScale));
-    const text = detail.Head?.Text;
-    const content = `地震情報: ${hypocenter?.Name ?? '震源不明'} 最大震度 ${scaleToString(maxScale)}`;
+    const preliminary = !hypocenter?.Name;
+    const cancelled = detail.Head?.InfoType === '取消';
+    const text = detail.Body?.Comments?.ForecastComment?.Text || detail.Head?.Text || detail.Head?.Headline?.Text;
+    const observedAreas = (detail.Body?.Intensity?.Observation?.Pref ?? []).flatMap(pref => (pref.Area ?? []).map(area => ({ name: area.Name || pref.Name, scale: area.MaxInt || pref.MaxInt })))
+        .filter(area => area.name).sort((a, b) => scaleRank(b.scale) - scaleRank(a.scale))
+        .slice(0, 12).map(area => `${area.name}: 震度${scaleToString(area.scale)}`).join('、');
+    const content = cancelled ? '地震情報 取消: この地震情報は取り消されました。'
+        : `地震情報: 最大震度 ${scaleToString(maxScale)} / ${hypocenter?.Name || '震源は解析中'}`;
     const embed = new discord_js_1.EmbedBuilder()
-        .setTitle(detail.Head?.Title ?? '地震情報')
+        .setTitle(cancelled ? '地震情報 取消' : preliminary ? '地震情報（初報）' : '地震情報（更新）')
         .setColor(0x2d6cdf)
-        .setDescription(text || '気象庁から新しい地震情報が発表されました。')
-        .addFields({ name: '震源', value: hypocenter?.Name ?? '不明', inline: true }, { name: '規模', value: formatMagnitude(earthquake?.Magnitude), inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter?.Depth, hypocenter?.Coordinate), inline: true }, { name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: '発生時刻', value: formatJstTime(earthquake?.OriginTime ?? earthquake?.ArrivalTime), inline: true }, { name: '発表時刻', value: formatJstTime(detail.Head?.ReportDateTime), inline: true })
+        .setDescription(cancelled ? 'この地震情報は取り消されました。' : preliminary ? '震源・規模・深さは解析中です。続報でこの投稿を更新します。' : (text || '気象庁の続報で更新しました。').slice(0, 4096))
+        .addFields({ name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: preliminary ? '揺れを観測した時刻' : '発生時刻', value: formatJstTime(earthquake?.OriginTime ?? earthquake?.ArrivalTime ?? detail.Head?.TargetDateTime), inline: true }, { name: '発表時刻', value: formatJstTime(detail.Head?.ReportDateTime), inline: true })
         .setFooter({ text: 'Source: 気象庁' })
         .setTimestamp(new Date());
+    if (!preliminary)
+        embed.addFields({ name: '震源', value: hypocenter?.Name || '解析中', inline: true }, { name: '規模', value: formatMagnitude(earthquake?.Magnitude), inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter?.Depth, hypocenter?.Coordinate), inline: true });
+    if (observedAreas)
+        embed.addFields({ name: '主な観測地域', value: observedAreas.slice(0, 1024) });
     if (intensityMap) {
         embed.setImage('attachment://intensity-map.png');
         embed.addFields(basemap_1.BASEMAP_CREDIT);
@@ -398,11 +368,11 @@ async function buildJmaQuakeEmbed(detail) {
     const files = [scaleImage, intensityMap].filter((file) => Boolean(file));
     return files.length ? { content, embeds: [embed], files } : { content, embeds: [embed] };
 }
-async function buildJmaTsunamiEmbed(detail) {
+async function buildJmaTsunamiEmbed(detail, includeMap = false) {
     const items = detail.Body?.Tsunami?.Forecast?.Item ?? [];
     const earthquake = detail.Body?.Earthquake?.[0];
-    const lines = await collectTsunamiLines(detail).catch(() => []);
-    const disasterMap = await (0, disaster_map_1.createDisasterMapAttachment)([], 'tsunami-map.png', lines).catch(() => null);
+    const lines = includeMap ? await collectTsunamiLines(detail).catch(() => []) : [];
+    const disasterMap = includeMap ? await (0, disaster_map_1.createDisasterMapAttachment)([], 'tsunami-map.png', lines).catch(() => null) : null;
     const affectedAreas = items
         .slice(0, 12)
         .map(item => {
@@ -429,29 +399,442 @@ async function buildJmaTsunamiEmbed(detail) {
     }
     return disasterMap ? { content, embeds: [embed], files: [disasterMap] } : { content, embeds: [embed] };
 }
-async function pollJmaQuake(client) {
-    const list = await fetchJmaList();
-    const latestPath = list.find(item => isValidJmaJsonPath(item.json))?.json;
-    if (!latestPath)
-        return;
-    const latestIds = loadLatestIds();
-    if (latestIds.quake === latestPath)
-        return;
-    const detail = await fetchJmaDetail(latestPath);
-    await sendToConfiguredChannels(client, await buildJmaQuakeEmbed(detail), detail.Body?.Intensity?.Observation?.MaxInt, `jma:${latestPath}`);
-    saveLatestIds({ quake: latestPath });
+const journalFile = 'eq-events.json';
+const loadJournal = () => (0, storage_1.readJson)(journalFile, { initialized: false, seen: {}, events: {} });
+const eventQueues = new Map();
+function serializeEvent(key, task) {
+    const next = (eventQueues.get(key) ?? Promise.resolve()).catch(() => undefined).then(task);
+    eventQueues.set(key, next);
+    void next.finally(() => { if (eventQueues.get(key) === next)
+        eventQueues.delete(key); }).catch(() => undefined);
+    return next;
 }
-async function pollJmaTsunami(client) {
-    const list = await fetchJmaTsunamiList();
-    const latestPath = list.find(item => isValidJmaJsonPath(item.json))?.json;
-    if (!latestPath)
+function saveEvent(key, event) {
+    const journal = loadJournal();
+    journal.events[key] = event;
+    (0, storage_1.writeJson)(journalFile, journal);
+}
+function markSeen(jsonPath) {
+    const journal = loadJournal();
+    journal.seen[jsonPath] = Date.now();
+    // Never expire unacknowledged deliveries. Successful old events can be pruned.
+    for (const [key, event] of Object.entries(journal.events)) {
+        if (Date.now() - event.updatedAt > 7 * 86400_000 && Object.entries(event.targets).every(([guildId, channelId]) => {
+            if (loadEqChannels()[guildId] !== channelId)
+                return true;
+            const delivery = event.deliveries[`${guildId}:${channelId}`];
+            return delivery && delivery.revision === event.revision && !delivery.pendingAlerts.length;
+        }))
+            delete journal.events[key];
+    }
+    journal.seen = Object.fromEntries(Object.entries(journal.seen).sort((a, b) => b[1] - a[1]).slice(0, 5000));
+    (0, storage_1.writeJson)(journalFile, journal);
+}
+function jmaEventKey(item, detail) {
+    const validId = (id) => typeof id === 'string' && /^\d{12,20}$/.test(id);
+    const detailId = detail.Head?.EventID;
+    if (validId(item.eid) && validId(detailId) && item.eid !== detailId)
+        throw new Error('JMA event ID mismatch');
+    const id = validId(detailId) ? detailId : validId(item.eid) ? item.eid : undefined;
+    // Missing identity is not permission to infer a match from time or location.
+    return id ? `jma:${id}` : `jma-report:${item.json}`;
+}
+function mergeJmaDetail(previous, next) {
+    return {
+        Head: { ...previous?.Head, ...next.Head },
+        Body: {
+            ...previous?.Body, ...next.Body,
+            Earthquake: next.Body?.Earthquake ? {
+                ...previous?.Body?.Earthquake, ...next.Body.Earthquake,
+                Hypocenter: next.Body.Earthquake.Hypocenter ? {
+                    ...previous?.Body?.Earthquake?.Hypocenter, ...next.Body.Earthquake.Hypocenter,
+                    Area: { ...previous?.Body?.Earthquake?.Hypocenter?.Area, ...next.Body.Earthquake.Hypocenter.Area },
+                } : previous?.Body?.Earthquake?.Hypocenter,
+            } : previous?.Body?.Earthquake,
+            Intensity: next.Body?.Intensity ?? previous?.Body?.Intensity,
+            Comments: next.Body?.Comments ?? previous?.Body?.Comments,
+        },
+    };
+}
+async function getQuakeChannel(client, guildId, channelId) {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild)
+        throw new Error('サーバーに未接続');
+    const channel = guild.channels.cache.get(channelId) ?? await guild.channels.fetch(channelId);
+    if (!isSendableChannel(channel) || !('messages' in channel))
+        throw new Error('送信・編集できないチャンネル');
+    return channel;
+}
+function unknownMessage(error) {
+    // 403, timeouts, and unknown channels must not cause duplicate replacement sends.
+    return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 10008);
+}
+async function deliverQuakeEvent(client, key, event, preparedPayload) {
+    const payload = preparedPayload ?? await buildJmaQuakeEmbed(event.detail);
+    const thresholds = loadEqThresholds();
+    const cancelled = event.detail.Head?.InfoType === '取消';
+    const rank = scaleRank(event.detail.Body?.Intensity?.Observation?.MaxInt);
+    const failures = [];
+    const configured = loadEqChannels();
+    await Promise.all(Object.entries(event.targets).map(async ([guildId, channelId]) => {
+        if (configured[guildId] !== channelId)
+            return;
+        const destination = `${guildId}:${channelId}`;
+        let delivery = event.deliveries[destination];
+        if (!delivery && (cancelled || rank === 0 || (thresholds[guildId] ?? 0) > rank))
+            return;
+        if (delivery?.revision === event.revision && !delivery.pendingAlerts.length)
+            return;
+        try {
+            const channel = await getQuakeChannel(client, guildId, channelId);
+            if (!delivery) {
+                const message = await channel.send(payload);
+                if (!message?.id)
+                    throw new Error('Discord message ID missing');
+                delivery = { messageId: message.id, revision: event.revision, pendingAlerts: [],
+                    ...(payload.embeds[0]?.data.image ? { mapRevision: event.revision } : {}) };
+                event.deliveries[destination] = delivery;
+                saveEvent(key, event);
+            }
+            else if (delivery.revision !== event.revision) {
+                try {
+                    await channel.messages.edit(delivery.messageId, { ...payload, attachments: [] });
+                }
+                catch (error) {
+                    if (!unknownMessage(error))
+                        throw error;
+                    const replacement = await channel.send(payload);
+                    if (!replacement?.id)
+                        throw new Error('Discord message ID missing');
+                    delivery.messageId = replacement.id;
+                }
+                delivery.revision = event.revision;
+                if (payload.embeds[0]?.data.image)
+                    delivery.mapRevision = event.revision;
+                saveEvent(key, event);
+            }
+            for (const alert of [...delivery.pendingAlerts]) {
+                await channel.send({
+                    content: `【最大震度の引き上げ】震度${alert.from} → 震度${alert.to}\nhttps://discord.com/channels/${guildId}/${channelId}/${delivery.messageId}`,
+                    embeds: [],
+                });
+                delivery.pendingAlerts = delivery.pendingAlerts.filter(item => item.revision !== alert.revision);
+                saveEvent(key, event);
+            }
+        }
+        catch (error) {
+            console.error(`地震情報の送信・更新失敗: ${destination}`, error);
+            failures.push(destination);
+        }
+    }));
+    if (failures.length)
+        throw new Error(`地震情報未達: ${failures.join(',')}`);
+}
+// Normal earthquake bulletins may wait up to three seconds for the map.
+// EEW, tsunami alerts, and separate intensity escalation alerts never wait here.
+exports.QUAKE_MAP_WAIT_MS = 3000;
+const quakeMapJobs = new Map();
+const scheduledMaps = new Set();
+function canMapQuake(event) {
+    return event.detail.Head?.InfoType !== '取消' && Boolean(event.detail.Body?.Earthquake?.Hypocenter?.Area?.Coordinate ||
+        event.detail.Body?.Intensity?.Observation?.Pref?.some(pref => pref.Area?.some(area => area.City?.some(city => city.IntensityStation?.some(station => station.latlon)))));
+}
+function quakeMapJob(key, event) {
+    if (!canMapQuake(event))
+        return undefined;
+    const jobKey = `${key}:${event.revision}`;
+    let entry = quakeMapJobs.get(jobKey);
+    if (!entry) {
+        entry = { promise: buildJmaQuakeEmbed(event.detail, true), settled: false };
+        quakeMapJobs.set(jobKey, entry);
+        const created = entry;
+        const settle = () => {
+            created.settled = true;
+            // Keep in-flight promises shared even during a large restart catch-up.
+            // Only completed image buffers count against the small result cache.
+            const completed = [...quakeMapJobs].filter(([, value]) => value.settled);
+            for (const [oldKey] of completed.slice(0, Math.max(0, completed.length - 20)))
+                quakeMapJobs.delete(oldKey);
+        };
+        void entry.promise.then(settle, settle);
+    }
+    return entry.promise;
+}
+async function readyMapPayload(key, event) {
+    const pending = Object.values(event.deliveries).some(delivery => delivery.pendingAlerts.length);
+    if (pending)
+        return undefined;
+    const job = quakeMapJob(key, event);
+    if (!job)
+        return undefined;
+    let timer;
+    try {
+        return await Promise.race([
+            job,
+            new Promise(resolve => { timer = setTimeout(() => resolve(undefined), exports.QUAKE_MAP_WAIT_MS); }),
+        ]);
+    }
+    finally {
+        if (timer)
+            clearTimeout(timer);
+    }
+}
+function queueQuakeMap(client, key, event) {
+    if (!Object.values(event.deliveries).some(delivery => delivery.revision === event.revision && delivery.mapRevision !== event.revision))
         return;
-    const latestIds = loadLatestIds();
-    if (latestIds.tsunami === latestPath)
+    const jobKey = `${key}:${event.revision}`;
+    if (scheduledMaps.has(jobKey))
         return;
-    const detail = await fetchJmaTsunamiDetail(latestPath);
-    await sendDisasterToConfiguredChannels(client, await buildJmaTsunamiEmbed(detail), `tsunami:${latestPath}`);
-    saveLatestIds({ tsunami: latestPath });
+    const job = quakeMapJob(key, event);
+    if (!job)
+        return;
+    scheduledMaps.add(jobKey);
+    void job.then(async (payload) => {
+        if (!payload.embeds[0].data.image)
+            return;
+        await serializeEvent(key, async () => {
+            const current = loadJournal().events[key];
+            if (!current || current.revision !== event.revision)
+                return;
+            for (const [guildId, channelId] of Object.entries(loadEqChannels())) {
+                const delivery = current.deliveries[`${guildId}:${channelId}`];
+                if (!delivery || delivery.revision !== event.revision || delivery.mapRevision === event.revision)
+                    continue;
+                try {
+                    const channel = await getQuakeChannel(client, guildId, channelId);
+                    await channel.messages.edit(delivery.messageId, { ...payload, attachments: [] });
+                    delivery.mapRevision = event.revision;
+                    saveEvent(key, current);
+                }
+                catch (error) {
+                    console.error('地震マップの追記失敗:', error);
+                }
+            }
+        });
+    }).catch(error => console.error('地震マップ生成失敗:', error));
+    // Optional map failures must not cause continuous tile downloads.
+    if (scheduledMaps.size > 1000)
+        scheduledMaps.delete(scheduledMaps.values().next().value);
+}
+async function applyJmaQuakeReport(client, item, detail) {
+    if (!isValidJmaJsonPath(item.json))
+        throw new Error('Invalid JMA detail path');
+    const key = jmaEventKey(item, detail);
+    const revision = `${item.ctt || detail.Head?.ReportDateTime || ''}:${item.json}`;
+    return serializeEvent(key, async () => {
+        let event = loadJournal().events[key];
+        if (!event || revision > event.revision) {
+            const oldScale = event?.detail.Body?.Intensity?.Observation?.MaxInt;
+            const merged = mergeJmaDetail(event?.detail, detail);
+            const newScale = merged.Body?.Intensity?.Observation?.MaxInt;
+            const deliveries = event?.deliveries ?? {};
+            for (const delivery of Object.values(deliveries)) {
+                delivery.pendingAlerts = detail.Head?.InfoType === '取消' ? [] : delivery.pendingAlerts.filter(alert => scaleRank(alert.to.replace('弱', '-').replace('強', '+')) <= scaleRank(newScale));
+            }
+            if (scaleRank(oldScale) > 0 && scaleRank(newScale) > scaleRank(oldScale) && detail.Head?.InfoType !== '取消') {
+                for (const delivery of Object.values(deliveries))
+                    delivery.pendingAlerts.push({
+                        revision, from: scaleToString(oldScale), to: scaleToString(newScale),
+                    });
+            }
+            const thresholds = loadEqThresholds();
+            const targets = Object.fromEntries(Object.entries(loadEqChannels()).filter(([guildId, channelId]) => deliveries[`${guildId}:${channelId}`] || (scaleRank(newScale) > 0 && (thresholds[guildId] ?? 0) <= scaleRank(newScale))));
+            event = { revision, detail: merged, deliveries, targets, updatedAt: Date.now() };
+            saveEvent(key, event);
+        }
+        markSeen(item.json);
+        const needsDelivery = Object.entries(event.targets).some(([guildId, channelId]) => event.deliveries[`${guildId}:${channelId}`]?.revision !== event.revision);
+        const mapPayload = needsDelivery ? await readyMapPayload(key, event) : undefined;
+        await deliverQuakeEvent(client, key, event, mapPayload);
+        queueQuakeMap(client, key, event);
+    });
+}
+async function retryQuakeEvents(client) {
+    const failures = [];
+    await Promise.all(Object.keys(loadJournal().events).map(key => serializeEvent(key, async () => {
+        const event = loadJournal().events[key];
+        if (!event)
+            return;
+        try {
+            const needsDelivery = Object.entries(event.targets).some(([guildId, channelId]) => loadEqChannels()[guildId] === channelId && event.deliveries[`${guildId}:${channelId}`]?.revision !== event.revision);
+            await deliverQuakeEvent(client, key, event, needsDelivery ? await readyMapPayload(key, event) : undefined);
+            queueQuakeMap(client, key, event);
+        }
+        catch (error) {
+            failures.push(error);
+        }
+    })));
+    if (failures.length)
+        throw new Error(`${failures.length}件の地震配信が未完了`);
+}
+async function processP2PFallbacks(client) {
+    const pending = (0, storage_1.readJson)('eq-fallback-pending.json', {});
+    const failures = [];
+    for (const message of Object.values(pending)) {
+        try {
+            await sendToConfiguredChannels(client, await buildP2PQuakeEmbed(message), message.earthquake?.maxScale, `p2p:${message.id}`);
+            const current = (0, storage_1.readJson)('eq-fallback-pending.json', {});
+            delete current[message.id];
+            (0, storage_1.writeJson)('eq-fallback-pending.json', current);
+            saveLatestIds({ p2pQuake: message.id });
+        }
+        catch (error) {
+            failures.push(error);
+        }
+    }
+    if (failures.length)
+        throw new Error('P2P代替速報に未達があります');
+}
+let fallbackRetry;
+function retryP2PFallbacks(client) {
+    if (!fallbackRetry)
+        fallbackRetry = processP2PFallbacks(client).finally(() => { fallbackRetry = undefined; });
+    return fallbackRetry;
+}
+let quakePoll;
+function pollJmaQuake(client) {
+    if (quakePoll)
+        return quakePoll;
+    quakePoll = (async () => {
+        const failures = [];
+        // Retry persisted deliveries even if the list is unavailable or has rolled over.
+        const retries = Promise.all([
+            retryQuakeEvents(client).catch(error => console.error('地震更新の再試行失敗:', error)),
+            retryP2PFallbacks(client).catch(error => console.error('代替速報の再試行失敗:', error)),
+        ]);
+        try {
+            const list = await quakeFeed.get();
+            if (!Array.isArray(list)) {
+                quakeDetailsHealthy = false;
+                throw new Error('Invalid JMA quake list');
+            }
+            quakeDetailsHealthy = true;
+            const items = list.filter(item => isValidJmaJsonPath(item.json)).sort((a, b) => String(a.ctt).localeCompare(String(b.ctt)));
+            const journal = loadJournal();
+            if (!journal.initialized && items.length) {
+                const oldPath = loadLatestIds().quake;
+                const old = items.find(item => item.json === oldPath);
+                const newest = items[items.length - 1];
+                // On first install, avoid replaying the entire historical list. On an
+                // upgrade use the previous cursor, when still present, for catch-up.
+                for (const item of items) {
+                    if (old ? String(item.ctt) <= String(old.ctt) : item.json !== newest.json)
+                        journal.seen[item.json] = Date.now();
+                }
+                journal.initialized = true;
+                (0, storage_1.writeJson)(journalFile, journal);
+            }
+            const unseen = items.filter(item => !loadJournal().seen[item.json]);
+            const groups = new Map();
+            for (const item of unseen) {
+                const key = item.eid || item.json;
+                groups.set(key, [...(groups.get(key) ?? []), item]);
+            }
+            // Serialize bulletins for one event; separate earthquakes progress independently.
+            // At most four simultaneous detail requests, regardless of feed size.
+            const work = [...groups.values()];
+            await Promise.all(Array.from({ length: Math.min(4, work.length) }, async () => {
+                for (let group = work.shift(); group; group = work.shift()) {
+                    for (const item of group) {
+                        let detail;
+                        try {
+                            detail = await fetchJmaDetail(item.json);
+                            jmaEventKey(item, detail);
+                        }
+                        catch (error) {
+                            quakeDetailsHealthy = false;
+                            failures.push(error);
+                            continue;
+                        }
+                        try {
+                            await applyJmaQuakeReport(client, item, detail);
+                        }
+                        catch (error) {
+                            console.error('地震情報処理失敗（保存済み情報は再試行）:', error);
+                        }
+                    }
+                }
+            }));
+        }
+        catch (error) {
+            failures.push(error);
+        }
+        await retries;
+        if (failures.length)
+            throw failures[0];
+    })().finally(() => { quakePoll = undefined; });
+    return quakePoll;
+}
+async function processJmaTsunami(client) {
+    const stateFile = 'tsunami-reports.json';
+    const state = (0, storage_1.readJson)(stateFile, { initialized: false, seen: {}, pending: {} });
+    const failures = [];
+    const deliverPending = async () => {
+        for (const [jsonPath, detail] of Object.entries(state.pending)) {
+            try {
+                // Tsunami alerts are independent of earthquake thresholds and maps.
+                let mapPayload;
+                await sendToConfiguredChannels(client, await buildJmaTsunamiEmbed(detail), undefined, `tsunami:${jsonPath}`, true, (guildId, channelId, messageId) => {
+                    mapPayload ??= buildJmaTsunamiEmbed(detail, true);
+                    queueTsunamiMap(client, mapPayload, guildId, channelId, messageId);
+                });
+                state.seen[jsonPath] = Date.now();
+                delete state.pending[jsonPath];
+                state.seen = Object.fromEntries(Object.entries(state.seen).sort((a, b) => b[1] - a[1]).slice(0, 2000));
+                (0, storage_1.writeJson)(stateFile, state);
+            }
+            catch (error) {
+                console.error('津波の未達情報は次回再試行:', error);
+            }
+        }
+    };
+    await deliverPending();
+    try {
+        const list = (await tsunamiFeed.get()).filter(item => isValidJmaJsonPath(item.json))
+            .sort((a, b) => String(a.ctt).localeCompare(String(b.ctt)));
+        if (!state.initialized && list.length) {
+            const old = list.find(item => item.json === loadLatestIds().tsunami);
+            for (const item of list) {
+                if (old ? String(item.ctt) <= String(old.ctt) : item.json !== list[list.length - 1].json)
+                    state.seen[item.json] = Date.now();
+            }
+            state.initialized = true;
+            (0, storage_1.writeJson)(stateFile, state);
+        }
+        for (const item of list) {
+            if (state.seen[item.json] || state.pending[item.json])
+                continue;
+            try {
+                state.pending[item.json] = await fetchJmaTsunamiDetail(item.json);
+                (0, storage_1.writeJson)(stateFile, state);
+                await deliverPending();
+            }
+            catch (error) {
+                failures.push(error);
+            }
+        }
+    }
+    catch (error) {
+        failures.push(error);
+    }
+    if (failures.length)
+        throw failures[0];
+}
+let tsunamiPoll;
+function pollJmaTsunami(client) {
+    if (!tsunamiPoll)
+        tsunamiPoll = processJmaTsunami(client).finally(() => { tsunamiPoll = undefined; });
+    return tsunamiPoll;
+}
+function queueTsunamiMap(client, mapPayload, guildId, channelId, messageId) {
+    // Maps are optional follow-up edits; a missing/forbidden message never generates
+    // another alert. Text delivery has already been committed before this runs.
+    void mapPayload.then(async (payload) => {
+        if (!payload.files?.length || loadEqChannels()[guildId] !== channelId)
+            return;
+        const channel = await getQuakeChannel(client, guildId, channelId);
+        await channel.messages.edit(messageId, { ...payload, attachments: [] });
+    }).catch(error => console.error('津波マップ追記失敗:', error));
 }
 function shouldNotifyP2PMessage(message) {
     if (!message || typeof message !== 'object')
@@ -473,8 +856,12 @@ async function handleP2PMessage(client, rawData) {
     }
     if (latestIds.p2pQuake === message.id)
         return;
-    await sendToConfiguredChannels(client, await buildP2PQuakeEmbed(message), message.earthquake?.maxScale, `p2p:${message.id}`);
-    saveLatestIds({ p2pQuake: message.id });
+    // 551 IDs are bulletin IDs, not JMA event IDs. Do not guess from rounded times.
+    // JMA is the canonical normal-quake stream; keep a labelled fallback during outages.
+    if (quakeFeed.healthy() && quakeDetailsHealthy)
+        return;
+    (0, storage_1.writeJson)('eq-fallback-pending.json', { ...(0, storage_1.readJson)('eq-fallback-pending.json', {}), [message.id]: message });
+    await retryP2PFallbacks(client);
 }
 function startP2PWebSocket(client) {
     let reconnectTimer;
@@ -515,20 +902,8 @@ function startP2PWebSocket(client) {
     };
     connect();
 }
-function schedulePoll(task) {
-    const tick = async () => {
-        try {
-            await task();
-        }
-        catch (error) {
-            console.error('気象庁監視エラー:', error);
-        }
-        setTimeout(tick, 60_000).unref();
-    };
-    void tick();
-}
 function startEqAutoNotify(client) {
     startP2PWebSocket(client);
-    schedulePoll(() => pollJmaTsunami(client));
-    schedulePoll(() => pollJmaQuake(client));
+    (0, jma_polling_1.scheduleJmaPoll)(() => pollJmaTsunami(client));
+    (0, jma_polling_1.scheduleJmaPoll)(() => pollJmaQuake(client));
 }

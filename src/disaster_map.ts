@@ -1,4 +1,4 @@
-import { fetchBaseMapTile, baseMapAttributionSvg } from './basemap'
+import { fetchBaseMapTiles, baseMapAttributionSvg } from './basemap'
 import { AttachmentBuilder } from 'discord.js'
 import sharp, { type OverlayOptions } from 'sharp'
 
@@ -546,18 +546,20 @@ export async function createDisasterMapAttachment(
     const maxTileY = Math.floor((top + MAP_HEIGHT) / TILE_SIZE)
     const composites: OverlayOptions[] = []
 
+    const coordinates: [number, number, number][] = []
     for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
-        for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
-            const tile = await fetchBaseMapTile(zoom, tileX, tileY)
-            if (!tile) continue
-
-            composites.push({
-                input: tile,
-                left: Math.round(tileX * TILE_SIZE - left),
-                top: Math.round(tileY * TILE_SIZE - top),
-            })
-        }
+        for (let tileX = minTileX; tileX <= maxTileX; tileX++) coordinates.push([zoom, tileX, tileY])
     }
+    const tiles = await fetchBaseMapTiles(coordinates)
+    tiles.forEach((tile, index) => {
+        if (!tile) return
+        const [, tileX, tileY] = coordinates[index]
+        composites.push({
+            input: tile,
+            left: Math.round(tileX * TILE_SIZE - left),
+            top: Math.round(tileY * TILE_SIZE - top),
+        })
+    })
 
     composites.push({
         input: buildOverlaySvg(points, lines, center, zoom),
