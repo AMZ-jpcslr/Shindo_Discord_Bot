@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.data = void 0;
 exports.execute = execute;
+const intensity_colors_1 = require("../intensity_colors");
 const basemap_1 = require("../basemap");
 const http_1 = require("../http");
 const discord_js_1 = require("discord.js");
@@ -176,7 +177,7 @@ async function buildJmaEmbed(detail) {
     const intensityMap = await (0, intensity_map_1.createIntensityMapAttachment)(detail, 'intensity-map.png').catch(() => null);
     const embed = new discord_js_1.EmbedBuilder()
         .setTitle(detail.Head?.Title ?? '直近の地震情報')
-        .setColor(0x2d6cdf)
+        .setColor((0, intensity_colors_1.intensityEmbedColor)(maxScale))
         .setDescription(detail.Head?.Text || '気象庁から発表された直近の地震情報です。')
         .addFields({ name: '震源', value: hypocenter?.Name ?? '不明', inline: true }, { name: '規模', value: earthquake?.Magnitude ? `M${earthquake.Magnitude}` : '不明', inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter?.Depth, hypocenter?.Coordinate), inline: true }, { name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: '発生時刻', value: formatJstTime(earthquake?.OriginTime ?? earthquake?.ArrivalTime), inline: true }, { name: '発表時刻', value: formatJstTime(detail.Head?.ReportDateTime), inline: true })
         .setFooter({ text: 'Source: 気象庁' });

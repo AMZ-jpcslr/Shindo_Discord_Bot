@@ -3,6 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const version_1 = require("./commands/version");
+const eq_history_1 = require("./commands/eq_history");
 const weather_1 = require("./commands/weather");
 const help_1 = require("./commands/help");
 const discord_js_1 = require("discord.js");
@@ -17,12 +19,14 @@ dotenv_1.default.config();
 const commands = [
     weather_1.data.toJSON(),
     help_1.data.toJSON(),
+    version_1.data.toJSON(),
     ping_1.data.toJSON(),
     lottery_1.data.toJSON(),
     shift_1.data.toJSON(),
     set_eq_channel_1.data.toJSON(),
     set_eq_threshold_1.data.toJSON(),
     get_eq_1.data.toJSON(),
+    eq_history_1.data.toJSON(),
 ];
 const token = process.env.TOKEN;
 const clientId = process.env.CLIENT_ID;

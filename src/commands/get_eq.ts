@@ -1,3 +1,4 @@
+import { intensityEmbedColor } from '../intensity_colors'
 import { BASEMAP_CREDIT } from '../basemap'
 import { fetchWithTimeout as fetch } from '../http'
 import { AttachmentBuilder, ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js'
@@ -239,7 +240,7 @@ async function buildJmaEmbed(detail: JmaQuakeDetail): Promise<{ embeds: EmbedBui
 
     const embed = new EmbedBuilder()
         .setTitle(detail.Head?.Title ?? '直近の地震情報')
-        .setColor(0x2d6cdf)
+        .setColor(intensityEmbedColor(maxScale))
         .setDescription(detail.Head?.Text || '気象庁から発表された直近の地震情報です。')
         .addFields(
             { name: '震源', value: hypocenter?.Name ?? '不明', inline: true },

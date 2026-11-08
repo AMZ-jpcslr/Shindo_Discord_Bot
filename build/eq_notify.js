@@ -19,6 +19,7 @@ exports.pollJmaQuake = pollJmaQuake;
 exports.pollJmaTsunami = pollJmaTsunami;
 exports.handleP2PMessage = handleP2PMessage;
 exports.startEqAutoNotify = startEqAutoNotify;
+const intensity_colors_1 = require("./intensity_colors");
 const basemap_1 = require("./basemap");
 const storage_1 = require("./storage");
 const http_1 = require("./http");
@@ -275,7 +276,7 @@ async function buildEewEmbed(message) {
         : `緊急地震速報: ${hypocenter?.name ?? '震源不明'} 最大予測震度 ${maxScale > 0 ? scaleToString(maxScale) : '不明'}`;
     const embed = new discord_js_1.EmbedBuilder()
         .setTitle(`${title} (${serial})`)
-        .setColor(message.cancelled ? 0x808080 : 0xff2d2d)
+        .setColor(message.cancelled ? 0x808080 : (0, intensity_colors_1.intensityEmbedColor)(maxScale))
         .setDescription(message.cancelled ? 'この緊急地震速報は取り消されました。' : '強い揺れに警戒してください。身の安全を確保してください。')
         .addFields({ name: '震源', value: hypocenter?.name ?? '不明', inline: true }, { name: '規模', value: formatMagnitude(hypocenter?.magnitude), inline: true }, { name: '深さ', value: formatJmaDepth(hypocenter?.depth ?? undefined, undefined), inline: true }, { name: '最大予測震度', value: maxScale > 0 ? scaleToString(maxScale) : '不明', inline: true }, { name: '発生時刻', value: formatJstTime(message.earthquake?.originTime), inline: true }, { name: '発表時刻', value: formatJstTime(message.issue?.time ?? message.time), inline: true })
         .setFooter({ text: 'Source: P2P地震情報 / 気象庁' })
@@ -307,7 +308,7 @@ async function buildP2PQuakeEmbed(message) {
     const embed = new discord_js_1.EmbedBuilder()
         .setTitle('地震情報（P2P代替速報）')
         .setDescription(`${preliminary ? '震源・規模・深さは解析中です。\n' : ''}気象庁の取得が不調のため代替配信しています。共通イベントIDがないため、復旧後の気象庁情報とは別投稿になります。`)
-        .setColor(0x2d6cdf)
+        .setColor((0, intensity_colors_1.intensityEmbedColor)(quake?.maxScale))
         .addFields({ name: '最大震度', value: scaleToString(quake?.maxScale), inline: true }, { name: '発生時刻', value: formatJstTime(quake?.time), inline: true }, { name: '津波', value: { None: '心配なし', Unknown: '調査中', Checking: '調査中', NonEffective: '若干の海面変動の可能性', Watch: '津波注意報あり', Warning: '津波警報あり' }[quake?.domesticTsunami ?? ''] ?? '調査中', inline: true })
         .setFooter({ text: `Source: ${message.issue?.source ?? 'P2P地震情報 / 気象庁'}` })
         .setTimestamp(new Date());
@@ -346,7 +347,7 @@ async function buildJmaQuakeEmbed(detail, includeMap = false) {
         : `地震情報: 最大震度 ${scaleToString(maxScale)} / ${hypocenter?.Name || '震源は解析中'}`;
     const embed = new discord_js_1.EmbedBuilder()
         .setTitle(cancelled ? '地震情報 取消' : preliminary ? '地震情報（初報）' : '地震情報（更新）')
-        .setColor(0x2d6cdf)
+        .setColor(cancelled ? 0x808080 : (0, intensity_colors_1.intensityEmbedColor)(maxScale))
         .setDescription(cancelled ? 'この地震情報は取り消されました。' : preliminary ? '震源・規模・深さは解析中です。続報でこの投稿を更新します。' : (text || '気象庁の続報で更新しました。').slice(0, 4096))
         .addFields({ name: '最大震度', value: scaleToString(maxScale), inline: true }, { name: preliminary ? '揺れを観測した時刻' : '発生時刻', value: formatJstTime(earthquake?.OriginTime ?? earthquake?.ArrivalTime ?? detail.Head?.TargetDateTime), inline: true }, { name: '発表時刻', value: formatJstTime(detail.Head?.ReportDateTime), inline: true })
         .setFooter({ text: 'Source: 気象庁' })

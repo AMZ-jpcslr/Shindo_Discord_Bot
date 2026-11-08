@@ -1,3 +1,4 @@
+import { intensityEmbedColor } from './intensity_colors'
 import { BASEMAP_CREDIT } from './basemap'
 import { readJson, writeJson } from './storage'
 import { fetchWithTimeout as fetch } from './http'
@@ -469,7 +470,7 @@ async function buildEewEmbed(message: P2PEewMessage): Promise<DiscordPayload> {
 
     const embed = new EmbedBuilder()
         .setTitle(`${title} (${serial})`)
-        .setColor(message.cancelled ? 0x808080 : 0xff2d2d)
+        .setColor(message.cancelled ? 0x808080 : intensityEmbedColor(maxScale))
         .setDescription(message.cancelled ? 'この緊急地震速報は取り消されました。' : '強い揺れに警戒してください。身の安全を確保してください。')
         .addFields(
             { name: '震源', value: hypocenter?.name ?? '不明', inline: true },
@@ -514,7 +515,7 @@ async function buildP2PQuakeEmbed(message: P2PQuakeMessage): Promise<DiscordPayl
     const embed = new EmbedBuilder()
         .setTitle('地震情報（P2P代替速報）')
         .setDescription(`${preliminary ? '震源・規模・深さは解析中です。\n' : ''}気象庁の取得が不調のため代替配信しています。共通イベントIDがないため、復旧後の気象庁情報とは別投稿になります。`)
-        .setColor(0x2d6cdf)
+        .setColor(intensityEmbedColor(quake?.maxScale))
         .addFields(
 
             { name: '最大震度', value: scaleToString(quake?.maxScale), inline: true },
@@ -572,7 +573,7 @@ export async function buildJmaQuakeEmbed(detail: JmaQuakeDetail, includeMap = fa
 
     const embed = new EmbedBuilder()
         .setTitle(cancelled ? '地震情報 取消' : preliminary ? '地震情報（初報）' : '地震情報（更新）')
-        .setColor(0x2d6cdf)
+        .setColor(cancelled ? 0x808080 : intensityEmbedColor(maxScale))
         .setDescription(cancelled ? 'この地震情報は取り消されました。' : preliminary ? '震源・規模・深さは解析中です。続報でこの投稿を更新します。' : (text || '気象庁の続報で更新しました。').slice(0, 4096))
         .addFields(
             { name: '最大震度', value: scaleToString(maxScale), inline: true },

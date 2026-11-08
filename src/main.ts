@@ -1,3 +1,7 @@
+import * as versionCommand from './commands/version'
+import { releasePresence } from './release'
+import { publishBotProfile } from './bot_profile'
+import * as eqHistoryCommand from './commands/eq_history'
 import * as weatherCommand from './commands/weather'
 import * as helpCommand from './commands/help'
 import { startWeatherNotify } from './weather_notify'
@@ -29,7 +33,7 @@ const client = new Client({
 
 function setBotPresence() {
     client.user?.setPresence({
-        activities: [{ name: '地震・津波・気象情報 | /help', type: 3 }],
+        activities: [{ name: releasePresence(), type: 3 }],
         status: 'online',
     })
 }
@@ -40,6 +44,11 @@ client.once('ready', () => {
     setBotPresence()
     startEqAutoNotify(client)
     startWeatherNotify(client)
+    // Announce the build only after this process is connected and monitoring has started.
+    // Profile I/O must never postpone earthquake notifications.
+    void publishBotProfile(client.application, process.env.BOT_PROFILE_UPDATE !== 'false').then(result => {
+        console.log(`プロフィール更新 ${result.state}: ${result.message}`)
+    })
     getRegions().catch(error => console.error('地域候補の準備に失敗:', error))
 
     setInterval(() => {
@@ -52,6 +61,15 @@ client.on('shardResume', () => {
 })
 
 client.on('interactionCreate', async (interaction) => {
+    if (interaction.isButton() && interaction.customId.startsWith('eqh:')) {
+        try { await eqHistoryCommand.handleButton(interaction) } catch (error) {
+            console.error('地震履歴操作エラー:', error)
+            const failure = { content: '履歴の操作に失敗しました。/eq_history で再検索してください。', ephemeral: true }
+            if (interaction.deferred || interaction.replied) await interaction.followUp(failure).catch(() => undefined)
+            else await interaction.reply(failure).catch(() => undefined)
+        }
+        return
+    }
     if (interaction.isAutocomplete() && interaction.commandName === 'weather') {
         await weatherCommand.autocomplete(interaction)
         return
@@ -62,6 +80,9 @@ client.on('interactionCreate', async (interaction) => {
         switch (interaction.commandName) {
             case 'weather':
                 await weatherCommand.execute(interaction)
+                break
+            case 'version':
+                await versionCommand.execute(interaction)
                 break
             case 'help':
                 await helpCommand.execute(interaction)
@@ -80,6 +101,9 @@ client.on('interactionCreate', async (interaction) => {
                 break
             case 'set_eq_threshold':
                 await setEqThresholdCommand.execute(interaction)
+                break
+            case 'eq_history':
+                await eqHistoryCommand.execute(interaction)
                 break
             case 'get_eq':
                 await getEqCommand.execute(interaction)

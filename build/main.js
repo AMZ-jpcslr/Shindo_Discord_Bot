@@ -36,6 +36,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const versionCommand = __importStar(require("./commands/version"));
+const release_1 = require("./release");
+const bot_profile_1 = require("./bot_profile");
+const eqHistoryCommand = __importStar(require("./commands/eq_history"));
 const weatherCommand = __importStar(require("./commands/weather"));
 const helpCommand = __importStar(require("./commands/help"));
 const weather_notify_1 = require("./weather_notify");
@@ -62,7 +66,7 @@ const client = new discord_js_1.Client({
 });
 function setBotPresence() {
     client.user?.setPresence({
-        activities: [{ name: '地震・津波・気象情報 | /help', type: 3 }],
+        activities: [{ name: (0, release_1.releasePresence)(), type: 3 }],
         status: 'online',
     });
 }
@@ -72,6 +76,11 @@ client.once('ready', () => {
     setBotPresence();
     (0, eq_notify_1.startEqAutoNotify)(client);
     (0, weather_notify_1.startWeatherNotify)(client);
+    // Announce the build only after this process is connected and monitoring has started.
+    // Profile I/O must never postpone earthquake notifications.
+    void (0, bot_profile_1.publishBotProfile)(client.application, process.env.BOT_PROFILE_UPDATE !== 'false').then(result => {
+        console.log(`プロフィール更新 ${result.state}: ${result.message}`);
+    });
     (0, weather_1.getRegions)().catch(error => console.error('地域候補の準備に失敗:', error));
     setInterval(() => {
         console.log(`Bot稼働中: ping=${client.ws.ping}ms / guilds=${client.guilds.cache.size}`);
@@ -81,6 +90,20 @@ client.on('shardResume', () => {
     setBotPresence();
 });
 client.on('interactionCreate', async (interaction) => {
+    if (interaction.isButton() && interaction.customId.startsWith('eqh:')) {
+        try {
+            await eqHistoryCommand.handleButton(interaction);
+        }
+        catch (error) {
+            console.error('地震履歴操作エラー:', error);
+            const failure = { content: '履歴の操作に失敗しました。/eq_history で再検索してください。', ephemeral: true };
+            if (interaction.deferred || interaction.replied)
+                await interaction.followUp(failure).catch(() => undefined);
+            else
+                await interaction.reply(failure).catch(() => undefined);
+        }
+        return;
+    }
     if (interaction.isAutocomplete() && interaction.commandName === 'weather') {
         await weatherCommand.autocomplete(interaction);
         return;
@@ -91,6 +114,9 @@ client.on('interactionCreate', async (interaction) => {
         switch (interaction.commandName) {
             case 'weather':
                 await weatherCommand.execute(interaction);
+                break;
+            case 'version':
+                await versionCommand.execute(interaction);
                 break;
             case 'help':
                 await helpCommand.execute(interaction);
@@ -109,6 +135,9 @@ client.on('interactionCreate', async (interaction) => {
                 break;
             case 'set_eq_threshold':
                 await setEqThresholdCommand.execute(interaction);
+                break;
+            case 'eq_history':
+                await eqHistoryCommand.execute(interaction);
                 break;
             case 'get_eq':
                 await getEqCommand.execute(interaction);

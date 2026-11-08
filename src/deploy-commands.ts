@@ -1,3 +1,5 @@
+import { data as versionData } from './commands/version'
+import { data as eqHistoryData } from './commands/eq_history'
 import { data as weatherData } from './commands/weather'
 import { data as helpData } from './commands/help'
 import { REST, Routes } from 'discord.js'
@@ -14,12 +16,14 @@ dotenv.config()
 const commands = [
     weatherData.toJSON(),
     helpData.toJSON(),
+    versionData.toJSON(),
     pingData.toJSON(),
     lotteryData.toJSON(),
     shiftData.toJSON(),
     setEqChannelData.toJSON(),
     setEqThresholdData.toJSON(),
     getEqData.toJSON(),
+    eqHistoryData.toJSON(),
 ]
 
 const token = process.env.TOKEN

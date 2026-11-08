@@ -1,3 +1,4 @@
+import { intensityEmbedColor } from './intensity_colors'
 import { fetchBaseMapTiles, baseMapAttributionSvg } from './basemap'
 import { AttachmentBuilder } from 'discord.js'
 import sharp, { type OverlayOptions } from 'sharp'
@@ -88,18 +89,15 @@ function intensityRank(intensity?: string): number {
 }
 
 function intensityColor(intensity?: string): string {
-    switch (intensity) {
-        case '7': return '#b40068'
-        case '6+': return '#a50021'
-        case '6-': return '#ff2800'
-        case '5+': return '#ff9900'
-        case '5-': return '#ffe600'
-        case '4': return '#ffff00'
-        case '3': return '#0041ff'
-        case '2': return '#1e88ff'
-        case '1': return '#75c8ff'
-        default: return '#808080'
-    }
+    return `#${intensityEmbedColor(intensity).toString(16).padStart(6, '0')}`
+}
+
+function intensityLabelColor(intensity?: string): string {
+    return ['5-', '5+', '7'].includes(intensity ?? '') ? '#ffffff' : '#101418'
+}
+
+function intensityBorderColor(intensity?: string): string {
+    return intensity === '7' ? '#ffe650' : '#101418'
 }
 
 function digitSegments(digit: string): string[] {
@@ -151,7 +149,10 @@ function signSvg(sign: string, x: number, y: number, color: string): string {
 }
 
 function intensityLabelSvg(label: string, x: number, y: number, color: string): string {
-    if (!label) return ''
+    if (!label || label === '?') return `
+        <path d="M ${x - 2.5} ${y - 2.8} Q ${x - 2.5} ${y - 5} ${x} ${y - 5} Q ${x + 3} ${y - 5} ${x + 3} ${y - 2.5} Q ${x + 3} ${y - 1} ${x} ${y + 0.5} L ${x} ${y + 1.5}" fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round"/>
+        <circle cx="${x}" cy="${y + 4}" r="1" fill="${color}"/>
+    `
     if (label.length === 1) return digitSvg(label, x, y, color)
 
     return `
@@ -161,7 +162,7 @@ function intensityLabelSvg(label: string, x: number, y: number, color: string): 
 }
 
 function buildLegendSvg(): string {
-    const entries = ['1', '2', '3', '4', '5-', '5+', '6-', '6+', '7']
+    const entries = ['1', '2', '3', '4', '5-', '5+', '6-', '6+', '7', '?']
     const rowHeight = 18
     const legendX = 12
     const legendY = 12
@@ -171,7 +172,7 @@ function buildLegendSvg(): string {
     const rows = entries.map((label, index) => {
         const y = legendY + 22 + index * rowHeight
         return `
-            <rect x="${legendX + 10}" y="${y - 8}" width="16" height="12" rx="2" fill="${intensityColor(label)}" stroke="#101418" stroke-width="1.5"/>
+            <rect x="${legendX + 10}" y="${y - 8}" width="16" height="12" rx="2" fill="${intensityColor(label)}" stroke="${intensityBorderColor(label)}" stroke-width="1.5"/>
             ${intensityLabelSvg(label, legendX + 46, y - 2, '#ffffff')}
         `
     }).join('')
@@ -254,10 +255,12 @@ function buildOverlaySvg(
     }
 
     const stationSvg = [...stationByCell.values()].map(({ station, x, y }) => {
-        const radius = intensityRank(station.Int) >= 5 ? 8 : 6
+        const radius = intensityRank(station.Int) >= 5 ? 10 : 8
+        const label = intensityRank(station.Int) > 0 ? station.Int! : '?'
 
         return `
-            <circle cx="${x}" cy="${y}" r="${radius}" fill="${intensityColor(station.Int)}" stroke="#101418" stroke-width="2"/>
+            <circle cx="${x}" cy="${y}" r="${radius}" fill="${intensityColor(station.Int)}" stroke="${intensityBorderColor(station.Int)}" stroke-width="2"/>
+            ${intensityLabelSvg(label, x, y, intensityLabelColor(station.Int))}
         `
     }).join('')
 

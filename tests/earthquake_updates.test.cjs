@@ -195,6 +195,8 @@ test('tsunami warnings and cancellation send separately despite earthquake thres
     assert.equal(a.sent.length,2)
     assert.match(text(a.sent[0].payload),/津波警報/)
     assert.match(text(a.sent[1].payload),/解除/)
+    assert.equal(a.sent[0].payload.embeds[0].toJSON().color, 0xff1f1f)
+    assert.equal(a.sent[1].payload.embeds[0].toJSON().color, 0xff1f1f)
     assert.equal(a.edits.length,0)
 })
 
@@ -429,4 +431,35 @@ test('more than twenty in-flight maps stay shared through the announcement deadl
     assert.equal(finish.length,24,'unsettled map promises must not be evicted and rebuilt')
     for (const resolve of finish) resolve(null)
     await flush()
+})
+
+test('JMA embeds use intensity colors and keep textual intensity and cancellation', async () => {
+    const { intensityEmbedColor } = require('../build/intensity_colors')
+    for (const scale of ['1','2','3','4','5-','5+','6-','6+','7',undefined]) {
+        const report = detail(2, scale)
+        report.Body.Intensity.Observation.MaxInt = scale
+        const payload = await eq.buildJmaQuakeEmbed(report)
+        const embed = payload.embeds[0].toJSON()
+        assert.equal(embed.color, intensityEmbedColor(scale))
+        assert.ok(embed.fields.find(field => field.name === '最大震度').value)
+    }
+    const report = detail(2,'7')
+    report.Head.InfoType = '取消'
+    const cancelled = await eq.buildJmaQuakeEmbed(report)
+    assert.equal(cancelled.embeds[0].toJSON().color, 0x808080)
+    assert.match(text(cancelled), /取消/)
+})
+
+test('P2P fallback and EEW use intensity colors; EEW cancellation stays gray', async () => {
+    const { intensityEmbedColor } = require('../build/intensity_colors')
+    const {client,a} = discord()
+    await eq.handleP2PMessage(client,Buffer.from(JSON.stringify({code:551,id:'color-fallback',earthquake:{maxScale:50}})))
+    assert.equal(a.sent[0].payload.embeds[0].toJSON().color, intensityEmbedColor(50))
+    assert.match(text(a.sent[0].payload), /5強/)
+    await eq.handleP2PMessage(client,Buffer.from(JSON.stringify({code:556,id:'color-eew',cancelled:false,areas:[{name:'テスト地域',scaleFrom:45,scaleTo:60}]})))
+    assert.equal(a.sent[1].payload.embeds[0].toJSON().color, intensityEmbedColor(60))
+    assert.match(text(a.sent[1].payload), /最大予測震度/)
+    await eq.handleP2PMessage(client,Buffer.from(JSON.stringify({code:556,id:'color-cancel',cancelled:true,areas:[{scaleFrom:45,scaleTo:60}]})))
+    assert.equal(a.sent[2].payload.embeds[0].toJSON().color, 0x808080)
+    assert.match(text(a.sent[2].payload), /取消/)
 })
