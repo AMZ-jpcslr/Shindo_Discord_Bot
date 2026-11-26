@@ -3,6 +3,7 @@ import { BASEMAP_CREDIT } from './basemap'
 import { readJson, writeJson } from './storage'
 import { fetchWithTimeout as fetch } from './http'
 import { createCachedJsonFeed, scheduleJmaPoll } from './jma_polling'
+import { startHeartbeatSocket } from './p2p_socket'
 import {
     AttachmentBuilder,
     Client,
@@ -1086,18 +1087,12 @@ export async function handleP2PMessage(client: Client, rawData: WebSocket.RawDat
 }
 
 function startP2PWebSocket(client: Client) {
-    let reconnectTimer: NodeJS.Timeout | undefined
     let eewQueue = Promise.resolve()
     let quakeQueue = Promise.resolve()
 
-    const connect = () => {
-        const ws = new WebSocket(P2P_WS_URL)
-
-        ws.on('open', () => {
-            console.log('P2P地震情報 WebSocket に接続しました')
-        })
-
-        ws.on('message', (data) => {
+    startHeartbeatSocket({
+        url: P2P_WS_URL,
+        onMessage: data => {
             // Maps for ordinary earthquakes must never delay an EEW.
             let code: unknown
             try { code = (JSON.parse(data.toString()) as { code?: unknown }).code } catch { return }
@@ -1106,21 +1101,8 @@ function startP2PWebSocket(client: Client) {
             })
             if (code === 556) eewQueue = eewQueue.then(handle)
             else if (code === 551) quakeQueue = quakeQueue.then(handle)
-        })
-
-        ws.on('close', () => {
-            console.warn('P2P地震情報 WebSocket が切断されました。10秒後に再接続します。')
-            if (reconnectTimer) clearTimeout(reconnectTimer)
-            reconnectTimer = setTimeout(connect, 10 * 1000)
-        })
-
-        ws.on('error', (error) => {
-            console.error('P2P地震情報 WebSocket エラー:', error)
-            ws.close()
-        })
-    }
-
-    connect()
+        },
+    })
 }
 
 export function startEqAutoNotify(client: Client) {

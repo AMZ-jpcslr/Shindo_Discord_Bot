@@ -24,10 +24,10 @@ const basemap_1 = require("./basemap");
 const storage_1 = require("./storage");
 const http_1 = require("./http");
 const jma_polling_1 = require("./jma_polling");
+const p2p_socket_1 = require("./p2p_socket");
 const discord_js_1 = require("discord.js");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const ws_1 = __importDefault(require("ws"));
 const disaster_map_1 = require("./disaster_map");
 const intensity_map_1 = require("./intensity_map");
 const P2P_WS_URL = 'wss://api.p2pquake.net/v2/ws';
@@ -869,15 +869,11 @@ async function handleP2PMessage(client, rawData) {
     await retryP2PFallbacks(client);
 }
 function startP2PWebSocket(client) {
-    let reconnectTimer;
     let eewQueue = Promise.resolve();
     let quakeQueue = Promise.resolve();
-    const connect = () => {
-        const ws = new ws_1.default(P2P_WS_URL);
-        ws.on('open', () => {
-            console.log('P2P地震情報 WebSocket に接続しました');
-        });
-        ws.on('message', (data) => {
+    (0, p2p_socket_1.startHeartbeatSocket)({
+        url: P2P_WS_URL,
+        onMessage: data => {
             // Maps for ordinary earthquakes must never delay an EEW.
             let code;
             try {
@@ -893,19 +889,8 @@ function startP2PWebSocket(client) {
                 eewQueue = eewQueue.then(handle);
             else if (code === 551)
                 quakeQueue = quakeQueue.then(handle);
-        });
-        ws.on('close', () => {
-            console.warn('P2P地震情報 WebSocket が切断されました。10秒後に再接続します。');
-            if (reconnectTimer)
-                clearTimeout(reconnectTimer);
-            reconnectTimer = setTimeout(connect, 10 * 1000);
-        });
-        ws.on('error', (error) => {
-            console.error('P2P地震情報 WebSocket エラー:', error);
-            ws.close();
-        });
-    };
-    connect();
+        },
+    });
 }
 function startEqAutoNotify(client) {
     startP2PWebSocket(client);
