@@ -158,6 +158,21 @@ test('earthquake delivery retries only failed channels', async () => {
     fail=false; await sendToConfiguredChannels(client,{embeds:[]},40,'event')
     assert.deepEqual(sent,{a:1,b:2})
 })
+test('EEW broadcast starts every server send without waiting for slower servers', async () => {
+    const { sendToConfiguredChannels } = require('../build/eq_notify')
+    const ids=['a','b','c']; saveEqChannels(Object.fromEntries(ids.map(id=>[id,id])))
+    const started=[]; const release=[]
+    const client={guilds:{cache:new Map(ids.map(id=>[id,{channels:{cache:new Map([[id,{send:()=>{started.push(id);return new Promise(r=>release.push(()=>r({id:`m-${id}`})))}}]])}}]))}}
+    const delivered=[]
+    const done=sendToConfiguredChannels(client,{embeds:[]},40,'eew:parallel',false,(g)=>delivered.push(g))
+    await new Promise(r=>setImmediate(r))
+    assert.deepEqual(started.sort(),ids)
+    release.forEach(fn=>fn()); await done
+    assert.deepEqual(delivered.sort(),ids)
+    assert.equal(Object.keys(readJson('eq-deliveries.json',{})).length,3)
+    await sendToConfiguredChannels(client,{embeds:[]},40,'eew:parallel')
+    assert.equal(started.length,3)
+})
 test('concurrent earthquake/tsunami delivery records do not overwrite each other', async () => {
     const { sendToConfiguredChannels } = require('../build/eq_notify')
     saveEqChannels({g:'c'})

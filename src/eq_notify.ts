@@ -240,18 +240,22 @@ export async function sendToConfiguredChannels(
     const thresholds = loadEqThresholds()
     const sent = readJson<Record<string, number>>('eq-deliveries.json', {})
     const failures: string[] = []
-    for (const [guildId, channelId] of Object.entries(channels)) {
-        if (!bypassThreshold && (thresholds[guildId] ?? 0) > scaleRank(maxScale)) continue
+    // Send to every server at once so the last server is not delayed by the
+    // others. discord.js queues requests against Discord's rate limits.
+    await Promise.all(Object.entries(channels).map(async ([guildId, channelId]) => {
+        if (!bypassThreshold && (thresholds[guildId] ?? 0) > scaleRank(maxScale)) return
         const key = `${deliveryKey}:${guildId}:${channelId}`
-        if (sent[key]) continue
+        if (sent[key]) return
         try {
             const guild = client.guilds.cache.get(guildId)
             if (!guild) throw new Error('サーバーに未接続')
             const channel = guild.channels.cache.get(channelId) ?? await guild.channels.fetch(channelId)
             if (!isSendableChannel(channel)) throw new Error('送信できないチャンネル')
             const message = await channel.send(payload) as { id?: string }
-            sent[key] = Date.now()
-            const current = { ...readJson<Record<string, number>>('eq-deliveries.json', {}), [key]: sent[key] }
+            // Record each success immediately so a crash mid-broadcast does not
+            // resend to servers that already received it. The synchronous
+            // read-merge-write keeps concurrent broadcasts from overwriting each other.
+            const current = { ...readJson<Record<string, number>>('eq-deliveries.json', {}), [key]: Date.now() }
             const entries = Object.entries(current).sort((a,b) => b[1]-a[1]).slice(0,2000)
             writeJson('eq-deliveries.json', Object.fromEntries(entries))
             if (message?.id) onDelivered?.(guildId, channelId, message.id)
@@ -259,7 +263,7 @@ export async function sendToConfiguredChannels(
             console.error(`通知送信失敗: ${guildId}/${channelId}`, error)
             failures.push(guildId)
         }
-    }
+    }))
     if (failures.length) throw new Error(`通知未達: ${failures.join(',')}`)
 }
 
